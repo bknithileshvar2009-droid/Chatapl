@@ -1,0 +1,22 @@
+export const PRESET_AVATARS = [
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Aura',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Kira',
+  'https://api.dicebear.com/7.x/fun-emoji/svg?seed=Spark',
+  'https://api.dicebear.com/7.x/big-smile/svg?seed=Pixel',
+  'https://api.dicebear.com/7.x/lorelei/svg?seed=Nova',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Cyber',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Zion',
+  'https://api.dicebear.com/7.x/fun-emoji/svg?seed=Milo',
+  'https://api.dicebear.com/7.x/big-smile/svg?seed=Echo',
+  'https://api.dicebear.com/7.x/lorelei/svg?seed=Vance',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Nexus',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Orion',
+  'https://api.dicebear.com/7.x/fun-emoji/svg?seed=Blaze',
+  'https://api.dicebear.com/7.x/big-smile/svg?seed=Atlas',
+  'https://api.dicebear.com/7.x/lorelei/svg?seed=Luna',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Matrix',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=Cosmo',
+  'https://api.dicebear.com/7.x/fun-emoji/svg?seed=Sonic',
+  'https://api.dicebear.com/7.x/big-smile/svg?seed=Zephyr',
+  'https://api.dicebear.com/7.x/lorelei/svg?seed=Vega'
+];

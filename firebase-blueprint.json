@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "usernames": {
+      "title": "Username Mappings",
+      "description": "Maps unique @username to internal account email and uid for strict username auth flow",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID" },
+        "email": { "type": "string", "description": "Internal mapped email" },
+        "username": { "type": "string", "description": "Normalized username without @" }
+      },
+      "required": ["uid", "email", "username"]
+    },
+    "users": {
+      "title": "User Profiles",
+      "description": "User profile document indexed by auth.uid",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "display_name": { "type": "string" },
+        "bio": { "type": "string" },
+        "avatar_url": { "type": "string" },
+        "isSearchable": { "type": "boolean" },
+        "is_online": { "type": "boolean" },
+        "last_seen": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "email": { "type": "string" },
+        "fcmTokens": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["uid", "username", "display_name", "isSearchable"]
+    },
+    "chats": {
+      "title": "Chat Rooms",
+      "description": "Chat conversations between users, including group metadata and admin roles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "adminUids": { "type": "array", "items": { "type": "string" } },
+        "memberUids": { "type": "array", "items": { "type": "string" } },
+        "is_group": { "type": "boolean" },
+        "group_name": { "type": "string" },
+        "group_icon": { "type": "string" },
+        "last_message": { "type": "string" },
+        "last_message_time": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["participants", "is_group"]
+    },
+    "messages": {
+      "title": "Messages",
+      "description": "Chat messages within a chat room subcollection, supporting status, audio, replies, reactions and soft delete",
+      "type": "object",
+      "properties": {
+        "sender_id": { "type": "string" },
+        "content": { "type": "string" },
+        "type": { "type": "string" },
+        "attachment_url": { "type": "string" },
+        "audio_duration": { "type": "number" },
+        "reply_to_id": { "type": "string" },
+        "status": { "type": "string" },
+        "deliveredAt": { "type": "string" },
+        "readAt": { "type": "string" },
+        "isDeleted": { "type": "boolean" },
+        "created_at": { "type": "string" },
+        "reactions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "emoji": { "type": "string" },
+              "user_id": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["sender_id", "content", "created_at"]
+    },
+    "calls": {
+      "title": "WebRTC Calls",
+      "description": "Signaling documents for 1-on-1 audio and video calls",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["audio", "video"] },
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerAvatar": { "type": "string" },
+        "calleeId": { "type": "string" },
+        "calleeName": { "type": "string" },
+        "calleeAvatar": { "type": "string" },
+        "status": { "type": "string", "enum": ["offered", "answered", "rejected", "ended"] },
+        "offer": { "type": "object" },
+        "answer": { "type": "object" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["type", "callerId", "calleeId", "status"]
+    },
+    "statuses": {
+      "title": "24-Hour Stories / Statuses",
+      "description": "Expiring media updates and stories from contacts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userAvatar": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "caption": { "type": "string" },
+        "type": { "type": "string", "enum": ["image", "text"] },
+        "bgColor": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "viewers": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["userId", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/usernames/{username}": {
+      "schema": { "$ref": "#/entities/usernames" },
+      "description": "Username mappings"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/users" },
+      "description": "User profiles"
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/chats" },
+      "description": "Chat rooms"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/messages" },
+      "description": "Chat messages"
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/calls" },
+      "description": "WebRTC call signaling documents"
+    },
+    "/statuses/{statusId}": {
+      "schema": { "$ref": "#/entities/statuses" },
+      "description": "24-Hour expiring user stories/statuses"
+    }
+  }
+}

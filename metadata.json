@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp Web & Mobile Chat",
+  "description": "A private, real-time web & mobile chat application with user authentication, user search, private chat rooms, profile settings, and database/RLS exports.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
