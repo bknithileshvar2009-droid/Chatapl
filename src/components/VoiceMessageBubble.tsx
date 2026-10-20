@@ -139,11 +139,25 @@ export const VoiceMessageBubble: React.FC<Props> = ({
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
+      // Pause other audio notes
+      window.dispatchEvent(new CustomEvent('pause-other-voice-notes', { detail: { audioUrl } }));
+      
       audioRef.current.playbackRate = playbackRate;
       audioRef.current.play().catch(console.error);
       setIsPlaying(true);
     }
   };
+
+  useEffect(() => {
+    const handlePauseOthers = (e: any) => {
+      if (e.detail.audioUrl !== audioUrl && audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      }
+    };
+    window.addEventListener('pause-other-voice-notes', handlePauseOthers);
+    return () => window.removeEventListener('pause-other-voice-notes', handlePauseOthers);
+  }, [audioUrl]);
 
   const handleSpeedChange = () => {
     const speeds = [1, 1.5, 2];
@@ -268,6 +282,14 @@ export const VoiceMessageBubble: React.FC<Props> = ({
               >
                 {playbackRate}x
               </button>
+              <a
+                href={audioUrl}
+                download={`voice_note_${Date.now()}.webm`}
+                className={`p-1 rounded transition-colors ${isMe ? 'hover:bg-emerald-700/50' : 'hover:bg-slate-700'}`}
+                title="Download"
+              >
+                <ChevronDown size={14} className="rotate-0" />
+              </a>
             </div>
           </div>
         </div>

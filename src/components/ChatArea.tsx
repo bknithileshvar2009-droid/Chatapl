@@ -922,7 +922,25 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
             )}
           </div>
         </div>
+
+        {/* Search Input Bar (Visible when toggled) */}
+        {showSearchInChat && (
+          <div className="absolute top-full left-0 right-0 p-2 bg-[#1a1c20] border-b border-[#2d3139] z-20 flex items-center gap-2">
+            <Search className="w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search messages..."
+              value={searchInChat}
+              onChange={(e) => setSearchInChat(e.target.value)}
+              className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            />
+            <button onClick={() => { setShowSearchInChat(false); setSearchInChat(''); }} className="text-slate-400 hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+        )}
       </div>
+
 
       {/* Messages Stream Area */}
       {(() => {

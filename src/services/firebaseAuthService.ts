@@ -42,7 +42,7 @@ export class FirebaseAuthService {
     isSearchable: boolean = true,
     emailInput?: string
   ): Promise<Profile> {
-    const cleanUsername = usernameInput.trim().toLowerCase().replace(/^@/, '');
+    const cleanUsername = usernameInput.trim().toLowerCase().replace(/^@+/, '');
     if (!cleanUsername || cleanUsername.length < 3) {
       throw new Error("Username must be at least 3 characters long.");
     }
@@ -73,7 +73,7 @@ export class FirebaseAuthService {
       uid,
       email: mappedEmail,
       username: cleanUsername,
-      created_at: new Date().toISOString()
+      created_at: serverTimestamp()
     });
 
     // Step 4: Write User Profile document in Firestore 'users' collection
@@ -94,7 +94,9 @@ export class FirebaseAuthService {
 
     await setDoc(doc(db, 'users', uid), {
       ...newProfile,
-      uid
+      uid,
+      // Ensure consistency with search pattern
+      username_lowercase: cleanUsername
     });
 
     // Update Firebase Auth display info
@@ -184,7 +186,9 @@ export class FirebaseAuthService {
   private async syncGoogleUserProfile(user: any): Promise<Profile> {
     const uid = user.uid;
     const email = user.email || `${uid}@gmail.com`;
-    const cleanUsername = email.split('@')[0].toLowerCase().replace(/[^a-zA-Z0-9_]/g, '_');
+    // Consistent sanitization
+    const rawUsername = email.split('@')[0];
+    const cleanUsername = rawUsername.trim().toLowerCase().replace(/^@+/, '').replace(/[^a-zA-Z0-9_]/g, '_');
 
     // Create username mapping if not present
     const usernameDocRef = doc(db, 'usernames', cleanUsername);
@@ -221,7 +225,11 @@ export class FirebaseAuthService {
         email,
         is_google_protected: true
       };
-      await setDoc(userDocRef, { ...profile, uid });
+      await setDoc(userDocRef, { 
+        ...profile, 
+        uid, 
+        username_lowercase: cleanUsername 
+      });
     }
 
     return profile;
@@ -310,13 +318,15 @@ export class FirebaseAuthService {
   async syncUserProfile(profile: Profile): Promise<void> {
     if (!profile || !profile.id) return;
     try {
+      const cleanUsername = profile.username.trim().toLowerCase().replace(/^@+/, '');
       const userDocRef = doc(db, 'users', profile.id);
       await setDoc(
         userDocRef,
         {
           id: profile.id,
           uid: profile.id,
-          username: profile.username || `user_${profile.id.slice(-4)}`,
+          username: cleanUsername,
+          username_lowercase: cleanUsername,
           display_name: profile.display_name || profile.username || 'User',
           avatar_url: profile.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
           bio: profile.bio || 'Hey there!',
@@ -378,12 +388,21 @@ export class FirebaseAuthService {
    * 5. User Search by @username or display name (Real-time Firestore Users)
    */
   async searchUsers(searchQuery: string = '', currentUid: string = ''): Promise<Profile[]> {
-    const clean = searchQuery.trim().toLowerCase().replace(/^@/, '');
+    const clean = searchQuery.trim().toLowerCase().replace(/^@+/, '');
+    if (!clean || clean.length < 2) return [];
+
     const usersCol = collection(db, 'users');
+    
+    // Prefix matching query for 'username' field (which is already lowercase)
+    const q = query(
+      usersCol,
+      where('username', '>=', clean),
+      where('username', '<=', clean + '\uf8ff')
+    );
 
     let snapshot;
     try {
-      snapshot = await getDocs(usersCol);
+      snapshot = await getDocs(q);
     } catch (err) {
       console.warn('Firestore getDocs search users warning:', err);
       return [];
@@ -413,19 +432,13 @@ export class FirebaseAuthService {
       // Ensure profile is cached locally
       chatEngine.saveProfile(profile);
 
-      const usernameLower = (profile.username || '').toLowerCase();
-      const displayNameLower = (profile.display_name || '').toLowerCase();
-
+      // Final client-side check if necessary (e.g. private profile restriction)
       if (profile.is_private) {
-        // Private profile: require exact username search match
-        if (usernameLower === clean) {
+        if (profile.username === clean) {
           results.push(profile);
         }
       } else {
-        // Public profile: match handle or display name
-        if (!clean || usernameLower.includes(clean) || displayNameLower.includes(clean)) {
-          results.push(profile);
-        }
+        results.push(profile);
       }
     });
 
@@ -587,6 +600,10 @@ export class FirebaseAuthService {
           if (senderId && senderId !== currentUid) {
             playSound('incoming');
           }
+        }
+        if (change.type === 'modified') {
+          const data = change.doc.data();
+          console.log(`[Firestore message update event] Message ${change.doc.id} modified: status=${data.status}, readAt=${data.readAt}`);
         }
       });
 
@@ -884,21 +901,28 @@ export class FirebaseAuthService {
       }, { merge: true }).catch(() => {});
 
       const messagesCol = collection(db, 'chats', chatId, 'messages');
-      const q = query(
-        messagesCol,
-        where('status', '!=', 'read')
-      );
-      const snapshot = await getDocs(q);
+      let snapshot;
+      try {
+        const q = query(
+          messagesCol,
+          where('status', '!=', 'read')
+        );
+        snapshot = await getDocs(q);
+      } catch (queryErr) {
+        // Fallback to reading collection if index is missing
+        snapshot = await getDocs(messagesCol);
+      }
 
       const promises: Promise<void>[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        if (data.sender_id !== currentUid) {
+        const senderId = data.sender_id || data.uid || data.senderId;
+        if (senderId && senderId !== currentUid && data.status !== 'read') {
           promises.push(
             updateDoc(doc(db, 'chats', chatId, 'messages', docSnap.id), {
               status: 'read',
               readAt: now
-            }).catch((err) => console.error('Failed to mark message as read:', err))
+            }).catch((err) => console.warn('Failed to mark message as read:', err))
           );
         }
       });

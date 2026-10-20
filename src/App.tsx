@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './config/firebase';
 import { Profile, Room, CallSession } from './types';
 import { chatEngine } from './services/chatEngine';
 import { firebaseAuthService } from './services/firebaseAuthService';
@@ -18,7 +20,8 @@ import { callHistoryService } from './services/callHistoryService';
 import { MessageCircle, Sparkles, Shield, Lock, Radio, Laptop, CircleDashed } from 'lucide-react';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<Profile | null>(chatEngine.getCurrentUser());
+  const [isLoading, setIsLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [rooms, setRooms] = useState<Room[]>(chatEngine.getRooms());
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'chats' | 'status'>('chats');
@@ -30,7 +33,7 @@ export default function App() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   // Modals
-  const [isAuthOpen, setIsAuthOpen] = useState(!currentUser);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -40,19 +43,40 @@ export default function App() {
 
   // Subscribe to user and rooms
   useEffect(() => {
-    // Check if returning from Google OAuth redirect flow
-    firebaseAuthService.checkRedirectResult().then((redirectProfile) => {
-      if (redirectProfile) {
-        chatEngine.setCurrentUser(redirectProfile);
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      setIsLoading(true);
+      if (user) {
+        // User is logged in, sync with Firestore and update chatEngine
+        try {
+          // This should ideally be a method on firebaseAuthService to get profile by UID
+          // Since I don't have it, I'll use getDoc directly or assume syncGoogleUserProfile handles it.
+          // Wait, syncGoogleUserProfile does exactly this!
+          
+          // Actually, I need to fetch the profile from Firestore.
+          const { doc, getDoc } = await import('firebase/firestore');
+          import('./config/firebase').then(({ db }) => {
+            getDoc(doc(db, 'users', user.uid)).then((userSnap) => {
+               if (userSnap.exists()) {
+                 const profile = { ...userSnap.data(), id: user.uid, is_online: true } as Profile;
+                 chatEngine.setCurrentUser(profile);
+                 setCurrentUser(profile);
+                 setIsAuthOpen(false);
+               }
+               setIsLoading(false);
+            }).catch(() => setIsLoading(false));
+          });
+        } catch (err) {
+          console.error('Auth state change profile fetch error:', err);
+          setIsLoading(false);
+        }
+      } else {
+        chatEngine.logout();
+        setCurrentUser(null);
+        setIsAuthOpen(true);
+        setIsLoading(false);
       }
-    }).catch((err) => {
-      console.warn('Redirect auth check error:', err);
     });
 
-    const unsubUser = chatEngine.subscribeCurrentUser((user) => {
-      setCurrentUser(user);
-      setIsAuthOpen(!user);
-    });
 
     const unsubRooms = chatEngine.subscribeRooms((updatedRooms) => {
       setRooms((prev) => {
@@ -72,7 +96,7 @@ export default function App() {
     }
 
     return () => {
-      unsubUser();
+      unsubAuth();
       unsubRooms();
       if (unsubUsers) unsubUsers();
     };
@@ -345,7 +369,9 @@ export default function App() {
 
       {/* Main Workspace Frame */}
       <div id="app-workspace-body" className="flex-1 flex overflow-hidden relative bg-slate-950">
-        {!currentUser ? (
+        {isLoading ? (
+          <div className="flex-1 flex items-center justify-center text-slate-400">Loading your session...</div>
+        ) : !currentUser ? (
           <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400 bg-gradient-to-b from-[#0b0e17] via-[#0f1424] to-[#0a0c14] relative overflow-hidden">
             <div className="absolute w-72 h-72 bg-blue-600/10 rounded-full blur-3xl animate-pulse" />
             <div className="absolute w-72 h-72 bg-purple-600/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1.5s' }} />

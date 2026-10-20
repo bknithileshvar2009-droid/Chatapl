@@ -23,6 +23,8 @@ export const db = firebaseAppletConfig.firestoreDatabaseId
   : getFirestore(app);
 
 export const auth = getAuth(app);
+import { setPersistence, browserLocalPersistence } from 'firebase/auth';
+setPersistence(auth, browserLocalPersistence).catch(console.error);
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 const googleClientId = getEnvVariable('GOOGLE_CLIENT_ID') || firebaseAppletConfig.oAuthClientId || '276649816564-ivhfpb89ore0d79affapbm9v2rjfgo18.apps.googleusercontent.com';
