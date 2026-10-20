@@ -226,10 +226,14 @@ export class FirebaseAuthService {
         is_google_protected: true
       };
       await setDoc(userDocRef, { 
-        ...profile, 
-        uid, 
-        username_lowercase: cleanUsername 
-      });
+        uid,
+        email,
+        display_name: profile.display_name,
+        username: profile.username,
+        username_lowercase: cleanUsername,
+        avatar_url: profile.avatar_url,
+        created_at: serverTimestamp()
+      }, { merge: true });
     }
 
     return profile;
