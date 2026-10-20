@@ -6,7 +6,7 @@ import { UserSettingsModule } from './UserSettingsModule';
 import { ChatWallpaperSelector } from './ChatWallpaperSelector';
 import { ChatBubbleColorSelector } from './ChatBubbleColorSelector';
 import { PRESET_AVATARS } from '../constants/avatars';
-import { X, Lock, Globe, Camera, Check, UserCheck, LogOut, ShieldCheck, ChevronDown, ChevronUp, Key, Loader2, AlertCircle, Sliders, Upload } from 'lucide-react';
+import { X, Lock, Globe, Camera, Check, UserCheck, LogOut, ShieldCheck, ChevronDown, ChevronUp, Key, Loader2, AlertCircle, Sliders, Upload, Share2, Copy, QrCode, ExternalLink, MessageCircle } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -16,7 +16,8 @@ interface Props {
 }
 
 export const ProfileSettingsModal: React.FC<Props> = ({ isOpen, onClose, currentUser, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'profile' | 'system'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'share' | 'system'>('profile');
+  const [copiedLink, setCopiedLink] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [bio, setBio] = useState('');
@@ -126,6 +127,18 @@ export const ProfileSettingsModal: React.FC<Props> = ({ isOpen, onClose, current
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('share')}
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-colors ${
+              activeTab === 'share'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Share2 className="w-4 h-4 text-emerald-400" />
+            Share Profile
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('system')}
             className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-colors ${
               activeTab === 'system'
@@ -141,6 +154,101 @@ export const ProfileSettingsModal: React.FC<Props> = ({ isOpen, onClose, current
         {activeTab === 'system' ? (
           <div className="p-6 overflow-y-auto flex-1">
             <UserSettingsModule />
+          </div>
+        ) : activeTab === 'share' ? (
+          <div className="p-6 overflow-y-auto flex-1 space-y-6">
+            {/* Visual Profile Share Card */}
+            <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-blue-950/60 p-6 rounded-2xl border border-blue-500/30 text-center space-y-4 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-3 opacity-10">
+                <QrCode className="w-28 h-28 text-blue-400" />
+              </div>
+              
+              <div className="relative inline-block">
+                <img
+                  src={currentUser.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde'}
+                  alt={currentUser.display_name}
+                  className="w-20 h-20 rounded-2xl object-cover ring-4 ring-blue-500/40 mx-auto shadow-md"
+                />
+                <span className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 rounded-full ring-2 ring-slate-900" />
+              </div>
+
+              <div>
+                <h3 className="text-lg font-bold text-white">{currentUser.display_name}</h3>
+                <p className="text-xs font-mono text-emerald-400 font-semibold mt-0.5">@{currentUser.username || 'username'}</p>
+                {currentUser.bio && (
+                  <p className="text-xs text-slate-300 mt-2 max-w-xs mx-auto italic bg-black/20 p-2 rounded-xl border border-white/5">
+                    "{currentUser.bio}"
+                  </p>
+                )}
+              </div>
+
+              {/* QR Code Graphic Badge */}
+              <div className="bg-white p-3 rounded-2xl inline-block shadow-inner mx-auto my-1">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(window.location.origin + '/?user=' + (currentUser.username || currentUser.id))}`}
+                  alt="Profile QR Code"
+                  className="w-24 h-24 rounded-lg"
+                  onError={(e) => {
+                    // Fallback if external API offline
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 uppercase tracking-widest font-extrabold">Scan to Chat on Nex Chat</p>
+            </div>
+
+            {/* Profile Share Link & Actions */}
+            <div className="space-y-3 bg-[#0f1115] p-4 rounded-2xl border border-[#2d3139]">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Share2 className="w-3.5 h-3.5 text-blue-400" />
+                Your Direct Share Link
+              </label>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={`${window.location.origin}/?user=${currentUser.username || currentUser.id}`}
+                  className="w-full px-3 py-2 text-xs bg-slate-900 text-cyan-400 border border-slate-700 rounded-xl font-mono focus:outline-none select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = `${window.location.origin}/?user=${currentUser.username || currentUser.id}`;
+                    navigator.clipboard.writeText(link);
+                    setCopiedLink(true);
+                    setTimeout(() => setCopiedLink(false), 2000);
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shrink-0 flex items-center gap-1.5 transition active:scale-95 shadow-md"
+                >
+                  {copiedLink ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+                  {copiedLink ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = `${window.location.origin}/?user=${currentUser.username || currentUser.id}`;
+                    if (navigator.share) {
+                      navigator.share({
+                        title: `Connect with ${currentUser.display_name} on Nex Chat`,
+                        text: `Chat with ${currentUser.display_name} (@${currentUser.username || 'user'}) on Nex Chat! Created by BKN BRAIN.`,
+                        url: link,
+                      }).catch(() => {});
+                    } else {
+                      navigator.clipboard.writeText(link);
+                      setCopiedLink(true);
+                      setTimeout(() => setCopiedLink(false), 2000);
+                    }
+                  }}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-md transition active:scale-95"
+                >
+                  <Share2 className="w-4 h-4" /> Share via Apps
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           /* Scrollable Form Body */

@@ -622,6 +622,21 @@ export class WebRTCCallService {
       });
     }
   }
+
+  public async replaceVideoTrack(newVideoTrack: MediaStreamTrack | null) {
+    if (!this.peerConnection || !newVideoTrack) return;
+    try {
+      const senders = this.peerConnection.getSenders();
+      const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
+      if (videoSender) {
+        await videoSender.replaceTrack(newVideoTrack);
+      } else {
+        this.peerConnection.addTrack(newVideoTrack, this.localStream || new MediaStream([newVideoTrack]));
+      }
+    } catch (err) {
+      console.warn('Error replacing WebRTC video track:', err);
+    }
+  }
 }
 
 export const webrtcCallService = new WebRTCCallService();

@@ -155,6 +155,93 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // ==========================================
+  // REAL-TIME MULTI-DEVICE CHAT BACKEND STORE
+  // ==========================================
+  interface ServerChatRoom {
+    id: string;
+    name?: string;
+    is_group?: boolean;
+    created_at: string;
+    updated_at: string;
+    created_by?: string;
+    last_message_text?: string;
+    last_message_time?: string;
+    avatar_url?: string;
+    topic?: string;
+    participants_count?: number;
+  }
+
+  interface ServerChatParticipant {
+    id: string;
+    room_id: string;
+    user_id: string;
+    role?: string;
+    joined_at?: string;
+    last_read_at?: string;
+  }
+
+  interface ServerChatProfile {
+    id: string;
+    username: string;
+    display_name: string;
+    bio?: string;
+    avatar_url?: string;
+    is_private?: boolean;
+    is_online?: boolean;
+    last_seen?: string;
+    created_at?: string;
+    updated_at?: string;
+    email?: string;
+    is_google_protected?: boolean;
+  }
+
+  interface ServerChatMessage {
+    id: string;
+    room_id: string;
+    sender_id: string;
+    content: string;
+    type: string;
+    attachment_url?: string;
+    audio_duration?: number;
+    reply_to_id?: string;
+    status: string;
+    created_at: string;
+    reactions?: Array<{ emoji: string; user_id: string }>;
+  }
+
+  let serverRoomsStore: ServerChatRoom[] = [
+    {
+      id: "room-general",
+      name: "🌍 Public Community Channel",
+      is_group: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      created_by: "system",
+      last_message_text: "Welcome to the Public Community! Everyone is automatically added compulsory.",
+      last_message_time: new Date().toISOString(),
+      topic: "Compulsory public room for all users. Anyone can message freely.",
+      avatar_url: "https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&q=80&w=250"
+    },
+    {
+      id: "room-tech",
+      name: "⚡ Tech & AI Lounge",
+      is_group: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      created_by: "system",
+      last_message_text: "Share ideas and connect live across devices!",
+      last_message_time: new Date().toISOString(),
+      topic: "Discuss AI, technology, code, and live developments.",
+      avatar_url: "https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&q=80&w=250"
+    }
+  ];
+
+  let serverParticipantsStore: ServerChatParticipant[] = [];
+  let serverProfilesStore: ServerChatProfile[] = [];
+  let serverMessagesStore: ServerChatMessage[] = [];
+  const onlineSocketsMap = new Map<string, string>(); // socket.id -> userId
+
   // Create HTTP server & Socket.io server
   const httpServer = http.createServer(app);
   const io = new SocketIOServer(httpServer, {
@@ -163,12 +250,222 @@ async function startServer() {
 
   io.on("connection", (socket) => {
     console.log("Socket.io client connected:", socket.id);
-    // Send current settings on connection
     socket.emit("settings_updated", userSettingsStore);
+
+    // Send initial chat sync state
+    socket.emit("sync_all", {
+      rooms: serverRoomsStore,
+      messages: serverMessagesStore,
+      profiles: serverProfilesStore,
+      participants: serverParticipantsStore,
+    });
+
+    socket.on("register_user", (profile: ServerChatProfile) => {
+      if (!profile || !profile.id) return;
+      onlineSocketsMap.set(socket.id, profile.id);
+      const existingIdx = serverProfilesStore.findIndex(p => p.id === profile.id);
+      const updatedProfile: ServerChatProfile = {
+        ...profile,
+        is_online: true,
+        last_seen: new Date().toISOString()
+      };
+      if (existingIdx >= 0) {
+        serverProfilesStore[existingIdx] = { ...serverProfilesStore[existingIdx], ...updatedProfile };
+      } else {
+        serverProfilesStore.push(updatedProfile);
+      }
+
+      // Auto join public group rooms
+      serverRoomsStore.forEach(room => {
+        if (room.is_group) {
+          const pId = `p-${room.id}-${profile.id}`;
+          if (!serverParticipantsStore.some(p => p.room_id === room.id && p.user_id === profile.id)) {
+            serverParticipantsStore.push({
+              id: pId,
+              room_id: room.id,
+              user_id: profile.id,
+              role: 'member',
+              joined_at: new Date().toISOString(),
+              last_read_at: new Date().toISOString()
+            });
+          }
+        }
+      });
+
+      io.emit("profile_updated", updatedProfile);
+      io.emit("user_presence", { userId: profile.id, isOnline: true });
+    });
+
+    socket.on("sync_request", () => {
+      socket.emit("sync_all", {
+        rooms: serverRoomsStore,
+        messages: serverMessagesStore,
+        profiles: serverProfilesStore,
+        participants: serverParticipantsStore,
+      });
+    });
+
+    socket.on("send_message", (msg: ServerChatMessage) => {
+      if (!msg || !msg.room_id || !msg.sender_id) return;
+      
+      if (!serverMessagesStore.some(m => m.id === msg.id)) {
+        serverMessagesStore.push(msg);
+        if (serverMessagesStore.length > 2000) {
+          serverMessagesStore = serverMessagesStore.slice(-2000);
+        }
+      }
+
+      const roomIdx = serverRoomsStore.findIndex(r => r.id === msg.room_id);
+      if (roomIdx >= 0) {
+        serverRoomsStore[roomIdx].last_message_text = msg.type === 'audio' ? '🎤 Voice message' : (msg.type === 'image' ? '📷 Photo' : msg.content);
+        serverRoomsStore[roomIdx].last_message_time = msg.created_at;
+        serverRoomsStore[roomIdx].updated_at = msg.created_at;
+      }
+
+      io.emit("receive_message", msg);
+      if (roomIdx >= 0) {
+        io.emit("room_updated", serverRoomsStore[roomIdx]);
+      }
+    });
+
+    socket.on("typing", (data: { roomId: string; userId: string; isTyping: boolean }) => {
+      socket.broadcast.emit("user_typing", data);
+    });
+
+    socket.on("add_reaction", (data: { messageId: string; roomId: string; emoji: string; userId: string }) => {
+      const msg = serverMessagesStore.find(m => m.id === data.messageId);
+      if (msg) {
+        if (!msg.reactions) msg.reactions = [];
+        const existing = msg.reactions.findIndex(r => r.user_id === data.userId);
+        if (existing >= 0) {
+          msg.reactions[existing].emoji = data.emoji;
+        } else {
+          msg.reactions.push({ emoji: data.emoji, user_id: data.userId });
+        }
+        io.emit("message_updated", msg);
+      }
+    });
+
+    socket.on("create_room", (data: { room: ServerChatRoom; participants: ServerChatParticipant[] }) => {
+      if (!data || !data.room) return;
+      if (!serverRoomsStore.some(r => r.id === data.room.id)) {
+        serverRoomsStore.unshift(data.room);
+      }
+      if (data.participants && Array.isArray(data.participants)) {
+        data.participants.forEach(p => {
+          if (!serverParticipantsStore.some(sp => sp.id === p.id)) {
+            serverParticipantsStore.push(p);
+          }
+        });
+      }
+      io.emit("room_created", { room: data.room, participants: data.participants });
+    });
+
+    socket.on("clear_chat", (data: { roomId: string }) => {
+      serverMessagesStore = serverMessagesStore.filter(m => m.room_id !== data.roomId);
+      io.emit("chat_cleared", data);
+    });
+
+    socket.on("disconnect", () => {
+      const userId = onlineSocketsMap.get(socket.id);
+      onlineSocketsMap.delete(socket.id);
+      if (userId) {
+        const stillConnected = Array.from(onlineSocketsMap.values()).includes(userId);
+        if (!stillConnected) {
+          const prof = serverProfilesStore.find(p => p.id === userId);
+          if (prof) {
+            prof.is_online = false;
+            prof.last_seen = new Date().toISOString();
+            io.emit("profile_updated", prof);
+            io.emit("user_presence", { userId, isOnline: false });
+          }
+        }
+      }
+    });
   });
 
   // Middleware to parse incoming JSON bodies
   app.use(express.json({ limit: "10mb" }));
+
+  // ==========================================
+  // REAL-TIME CHAT REST ENDPOINTS
+  // ==========================================
+  app.get("/api/chat/sync", (req, res) => {
+    res.status(200).json({
+      success: true,
+      rooms: serverRoomsStore,
+      messages: serverMessagesStore,
+      profiles: serverProfilesStore,
+      participants: serverParticipantsStore,
+    });
+  });
+
+  app.post("/api/chat/messages", (req, res) => {
+    const msg: ServerChatMessage = req.body;
+    if (!msg || !msg.room_id || !msg.sender_id) {
+      return res.status(400).json({ success: false, error: "Invalid message payload" });
+    }
+
+    if (!serverMessagesStore.some(m => m.id === msg.id)) {
+      serverMessagesStore.push(msg);
+      if (serverMessagesStore.length > 2000) {
+        serverMessagesStore = serverMessagesStore.slice(-2000);
+      }
+    }
+
+    const roomIdx = serverRoomsStore.findIndex(r => r.id === msg.room_id);
+    if (roomIdx >= 0) {
+      serverRoomsStore[roomIdx].last_message_text = msg.type === 'audio' ? '🎤 Voice message' : (msg.type === 'image' ? '📷 Photo' : msg.content);
+      serverRoomsStore[roomIdx].last_message_time = msg.created_at;
+      serverRoomsStore[roomIdx].updated_at = msg.created_at;
+    }
+
+    io.emit("receive_message", msg);
+    if (roomIdx >= 0) {
+      io.emit("room_updated", serverRoomsStore[roomIdx]);
+    }
+
+    return res.status(200).json({ success: true, message: msg });
+  });
+
+  app.post("/api/chat/rooms", (req, res) => {
+    const { room, participants } = req.body;
+    if (!room || !room.id) {
+      return res.status(400).json({ success: false, error: "Invalid room payload" });
+    }
+
+    if (!serverRoomsStore.some(r => r.id === room.id)) {
+      serverRoomsStore.unshift(room);
+    }
+
+    if (Array.isArray(participants)) {
+      participants.forEach((p: ServerChatParticipant) => {
+        if (!serverParticipantsStore.some(sp => sp.id === p.id)) {
+          serverParticipantsStore.push(p);
+        }
+      });
+    }
+
+    io.emit("room_created", { room, participants });
+    return res.status(200).json({ success: true, room });
+  });
+
+  app.post("/api/chat/profiles", (req, res) => {
+    const profile: ServerChatProfile = req.body;
+    if (!profile || !profile.id) {
+      return res.status(400).json({ success: false, error: "Invalid profile payload" });
+    }
+
+    const existingIdx = serverProfilesStore.findIndex(p => p.id === profile.id);
+    if (existingIdx >= 0) {
+      serverProfilesStore[existingIdx] = { ...serverProfilesStore[existingIdx], ...profile };
+    } else {
+      serverProfilesStore.push(profile);
+    }
+
+    io.emit("profile_updated", profile);
+    return res.status(200).json({ success: true, profile });
+  });
 
   // ==========================================
   // BACKEND API ENDPOINTS

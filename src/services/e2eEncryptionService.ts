@@ -1,5 +1,6 @@
 import CryptoJS from 'crypto-js';
 import { E2EKeyPair, EphemeralTimer, Message } from '../types';
+import { safeStorage } from '../utils/safeStorage';
 
 const KEY_PREFIX = 'apex_e2e_keypair_';
 
@@ -9,7 +10,7 @@ export class E2EEncryptionService {
    */
   async getOrCreateUserKeyPair(userId: string): Promise<E2EKeyPair> {
     const storageKey = `${KEY_PREFIX}${userId}`;
-    const existing = localStorage.getItem(storageKey);
+    const existing = safeStorage.getItem(storageKey);
     if (existing) {
       try {
         return JSON.parse(existing);
@@ -23,7 +24,7 @@ export class E2EEncryptionService {
     const publicKey = CryptoJS.SHA256(privateKey + '_pub_' + userId).toString(CryptoJS.enc.Hex);
 
     const keyPair: E2EKeyPair = { publicKey, privateKey };
-    localStorage.setItem(storageKey, JSON.stringify(keyPair));
+    safeStorage.setItem(storageKey, JSON.stringify(keyPair));
     return keyPair;
   }
 

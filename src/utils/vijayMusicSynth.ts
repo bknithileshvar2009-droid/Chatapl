@@ -7,6 +7,8 @@ export interface VijayTrack {
   category: string;
   bpm: number;
   url: string;
+  mp3Url?: string;
+  wavUrl?: string;
 }
 
 export const VIJAY_MUSIC_CATALOG: VijayTrack[] = [
@@ -331,28 +333,146 @@ function writeString(view: DataView, offset: number, string: string) {
   }
 }
 
-// Populate URLs in catalog dynamically
+// Populate URLs in catalog dynamically with MP3/WAV paths and WAV Data URL fallback
 VIJAY_MUSIC_CATALOG.forEach((t) => {
-  t.url = generateVijaySongAudioWav(t.id);
+  const synthWav = generateVijaySongAudioWav(t.id);
+  t.url = synthWav;
+  t.mp3Url = `/audio/vijay/${t.id}.mp3`;
+  t.wavUrl = `/audio/vijay/${t.id}.wav`;
 });
 
 // Live AudioContext Synthesizer for live playback preview & sound effects
 let liveAudioCtx: AudioContext | null = null;
 let activeSynthNodes: { osc1: OscillatorNode; osc2: OscillatorNode; gain: GainNode }[] = [];
+let isAudioUnlocked = false;
+
+/**
+ * Resumes and unlocks Web Audio API contexts and HTML5 Audio policies on user gesture
+ */
+export function unlockAudioContext(): void {
+  if (isAudioUnlocked && liveAudioCtx?.state === 'running') return;
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtx) {
+      if (!liveAudioCtx) {
+        liveAudioCtx = new AudioCtx();
+      }
+      if (liveAudioCtx.state === 'suspended') {
+        liveAudioCtx.resume().then(() => {
+          isAudioUnlocked = true;
+        }).catch(() => {});
+      } else {
+        isAudioUnlocked = true;
+      }
+    }
+  } catch (err) {
+    console.warn("Audio unlock failed:", err);
+  }
+}
+
+// Auto-register global unlock on first user interaction anywhere on the document
+if (typeof window !== 'undefined') {
+  const handleFirstInteraction = () => {
+    unlockAudioContext();
+    window.removeEventListener('pointerdown', handleFirstInteraction);
+    window.removeEventListener('click', handleFirstInteraction);
+    window.removeEventListener('touchstart', handleFirstInteraction);
+    window.removeEventListener('keydown', handleFirstInteraction);
+  };
+  window.addEventListener('pointerdown', handleFirstInteraction, { once: true, passive: true });
+  window.addEventListener('click', handleFirstInteraction, { once: true, passive: true });
+  window.addEventListener('touchstart', handleFirstInteraction, { once: true, passive: true });
+  window.addEventListener('keydown', handleFirstInteraction, { once: true, passive: true });
+}
+
+/**
+ * Plays a Thalapathy Vijay track with full .mp3 -> .wav -> generated WAV -> synth fallback
+ * and error catching on play() promises.
+ */
+export function playVijayAudioTrack(
+  track: VijayTrack,
+  onAudioCreated?: (audio: HTMLAudioElement) => void,
+  onEnded?: () => void
+): HTMLAudioElement {
+  unlockAudioContext();
+
+  const synthWav = generateVijaySongAudioWav(track.id);
+  // Choose primary candidate: custom uploaded data/blob URL, or mp3Url, or wavUrl, or synthWav
+  let primaryUrl = track.url;
+  if (!primaryUrl || primaryUrl === synthWav) {
+    primaryUrl = track.mp3Url || track.wavUrl || synthWav;
+  }
+
+  const audio = new Audio(primaryUrl);
+  let hasFallenBackToWav = false;
+
+  audio.onerror = () => {
+    if (!hasFallenBackToWav && primaryUrl !== synthWav) {
+      hasFallenBackToWav = true;
+      console.warn(`Primary audio format (.mp3/.wav) failed for ${track.title}, switching to generated WAV audio.`);
+      audio.src = synthWav;
+      audio.load();
+      audio.play().catch((err) => {
+        console.warn('Fallback WAV playback error:', err);
+        playVijayTrackLiveSynth(track.id);
+      });
+    } else {
+      console.warn(`WAV playback failed for ${track.title}, triggering live synth fallback.`);
+      playVijayTrackLiveSynth(track.id);
+    }
+  };
+
+  if (onEnded) {
+    audio.onended = onEnded;
+  }
+
+  if (onAudioCreated) {
+    onAudioCreated(audio);
+  }
+
+  const playPromise = audio.play();
+  if (playPromise !== undefined) {
+    playPromise.catch((err) => {
+      console.warn(`Audio play promise rejected for ${track.title}:`, err);
+      // If blocked by browser autoplay policy, attach retry on next user interaction
+      if (err.name === 'NotAllowedError') {
+        const retryOnInteraction = () => {
+          unlockAudioContext();
+          audio.play().catch(() => {
+            playVijayTrackLiveSynth(track.id);
+          });
+          window.removeEventListener('pointerdown', retryOnInteraction);
+          window.removeEventListener('click', retryOnInteraction);
+        };
+        window.addEventListener('pointerdown', retryOnInteraction, { once: true, passive: true });
+        window.addEventListener('click', retryOnInteraction, { once: true, passive: true });
+      } else if (!hasFallenBackToWav && primaryUrl !== synthWav) {
+        hasFallenBackToWav = true;
+        audio.src = synthWav;
+        audio.load();
+        audio.play().catch((fallbackErr) => {
+          console.warn('Fallback play error after rejection:', fallbackErr);
+        });
+      }
+    });
+  }
+
+  return audio;
+}
 
 export function playVijayTrackLiveSynth(trackId: string) {
   stopVijayTrackLiveSynth();
+  unlockAudioContext();
 
   try {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
     if (!liveAudioCtx) liveAudioCtx = new AudioCtx();
     if (liveAudioCtx.state === 'suspended') {
-      liveAudioCtx.resume();
+      liveAudioCtx.resume().catch(() => {});
     }
 
     const track = VIJAY_MUSIC_CATALOG.find((t) => t.id === trackId) || VIJAY_MUSIC_CATALOG[0];
-    const bpm = track.bpm || 128;
 
     const osc1 = liveAudioCtx.createOscillator();
     const osc2 = liveAudioCtx.createOscillator();

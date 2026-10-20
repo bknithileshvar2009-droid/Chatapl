@@ -1,12 +1,13 @@
 {
-  "projectId": "ambient-basis-9pt51",
-  "appId": "1:876589597603:web:73f1e3e97f0c1ad0405016",
-  "apiKey": "AIzaSyBnN9RxR1pDawHzVj0GrTN5Um0Ox4KREK4",
-  "authDomain": "ambient-basis-9pt51.firebaseapp.com",
+  "projectId": "gen-lang-client-0079533925",
+  "appId": "1:66925364916:web:b625891882f635276379e1",
+  "apiKey": "AIzaSyAHlYr4erSpNAdPZALgTuDinl7PKzwK1Fw",
+  "authDomain": "gen-lang-client-0079533925.firebaseapp.com",
+  "databaseURL": "https://gen-lang-client-0079533925-default-rtdb.firebaseio.com",
   "firestoreDatabaseId": "ai-studio-whatsappwebmobil-b3c67f0d-714c-40c6-9f6e-69b0b5cdc9f6",
-  "storageBucket": "ambient-basis-9pt51.firebasestorage.app",
-  "messagingSenderId": "876589597603",
+  "storageBucket": "gen-lang-client-0079533925.firebasestorage.app",
+  "messagingSenderId": "66925364916",
   "measurementId": "",
-  "oAuthClientId": "876589597603-oa42lpf4m6bqi3i4lipi34o4hlumu4ra.apps.googleusercontent.com",
+  "oAuthClientId": "66925364916-i5t6b5v1hpfcie6vnl1kn4dg2qd0432g.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

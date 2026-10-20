@@ -4,6 +4,8 @@ import {
   updatePassword,
   updateProfile as updateFirebaseProfile,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut as firebaseSignOut
 } from 'firebase/auth';
 import {
@@ -19,10 +21,12 @@ import {
   onSnapshot,
   orderBy,
   serverTimestamp,
-  deleteDoc
+  deleteDoc,
+  arrayUnion
 } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../config/firebase';
 import { Profile, Room, Message, MessageReaction } from '../types';
+import { chatEngine } from './chatEngine';
 import { playSound } from '../utils/sound';
 import { encryptMessage, decryptMessage, getRoomChannelKey } from '../utils/crypto';
 
@@ -77,7 +81,7 @@ export class FirebaseAuthService {
       id: uid,
       username: cleanUsername,
       display_name: finalDisplayName,
-      bio: 'Hey there! I am using Nexus WhatsApp.',
+      bio: 'Hey there! I am using Nex Chat.',
       avatar_url: defaultAvatar,
       is_private: !isSearchable,
       isSearchable,
@@ -175,11 +179,9 @@ export class FirebaseAuthService {
   }
 
   /**
-   * 3. Google / Gmail Sign In
+   * Helper to sync Google user to Firestore profile
    */
-  async loginWithGoogle(): Promise<Profile> {
-    const userCredential = await signInWithPopup(auth, googleProvider);
-    const user = userCredential.user;
+  private async syncGoogleUserProfile(user: any): Promise<Profile> {
     const uid = user.uid;
     const email = user.email || `${uid}@gmail.com`;
     const cleanUsername = email.split('@')[0].toLowerCase().replace(/[^a-zA-Z0-9_]/g, '_');
@@ -208,7 +210,7 @@ export class FirebaseAuthService {
         id: uid,
         username: cleanUsername,
         display_name: user.displayName || cleanUsername,
-        bio: 'Gmail Protected Account',
+        bio: 'Nex Chat User (Google Verified)',
         avatar_url: user.photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
         is_private: false,
         isSearchable: true,
@@ -223,6 +225,49 @@ export class FirebaseAuthService {
     }
 
     return profile;
+  }
+
+  /**
+   * Check for Google Redirect Auth result on load
+   */
+  async checkRedirectResult(): Promise<Profile | null> {
+    try {
+      const result = await getRedirectResult(auth);
+      if (result && result.user) {
+        return await this.syncGoogleUserProfile(result.user);
+      }
+    } catch (err: any) {
+      console.warn('Google Redirect Result error:', err);
+    }
+    return null;
+  }
+
+  /**
+   * 3. Google / Gmail Sign In with Popup & Fallback to Redirect
+   */
+  async loginWithGoogle(): Promise<Profile> {
+    try {
+      const userCredential = await signInWithPopup(auth, googleProvider);
+      return await this.syncGoogleUserProfile(userCredential.user);
+    } catch (err: any) {
+      console.warn('Google Popup Auth failed, attempting redirect fallback:', err);
+      if (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request') {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          // Handled on page reload via checkRedirectResult
+          throw new Error('Redirecting to Google Sign-In...');
+        } catch (redirectErr: any) {
+          throw new Error('Google Sign-In popup was blocked by browser. Please enable popups or try again.');
+        }
+      } else if (err.code === 'auth/unauthorized-domain') {
+        throw new Error('Unauthorized domain for Google Auth. Please add this domain in Firebase Console.');
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        throw new Error('Google Sign-In popup was closed before completing.');
+      } else if (err.code === 'auth/operation-not-allowed') {
+        throw new Error('Google Sign-In method is not enabled in Firebase Authentication.');
+      }
+      throw new Error(err.message || 'Google Authentication failed. Please try again.');
+    }
   }
 
   /**
@@ -260,25 +305,126 @@ export class FirebaseAuthService {
   }
 
   /**
-   * 5. User Search by @username (filtered by isSearchable == true)
+   * Sync user profile to Firestore
+   */
+  async syncUserProfile(profile: Profile): Promise<void> {
+    if (!profile || !profile.id) return;
+    try {
+      const userDocRef = doc(db, 'users', profile.id);
+      await setDoc(
+        userDocRef,
+        {
+          id: profile.id,
+          uid: profile.id,
+          username: profile.username || `user_${profile.id.slice(-4)}`,
+          display_name: profile.display_name || profile.username || 'User',
+          avatar_url: profile.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
+          bio: profile.bio || 'Hey there!',
+          isSearchable: profile.is_private ? false : true,
+          is_private: !!profile.is_private,
+          is_online: true,
+          last_seen: new Date().toISOString(),
+          created_at: profile.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          email: profile.email || ''
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Sync user profile to Firestore error:', err);
+    }
+  }
+
+  /**
+   * Subscribe to all registered user profiles in real-time
+   */
+  subscribeToAllUsers(onUsersChanged?: (users: Profile[]) => void): () => void {
+    const usersCol = collection(db, 'users');
+    return onSnapshot(
+      usersCol,
+      (snapshot) => {
+        const profiles: Profile[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          const pId = docSnap.id;
+          const profile: Profile = {
+            id: pId,
+            username: data.username || pId,
+            display_name: data.display_name || data.username || 'User',
+            bio: data.bio || '',
+            avatar_url: data.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
+            is_private: !!data.is_private,
+            isSearchable: data.isSearchable !== false,
+            is_online: data.is_online ?? true,
+            last_seen: data.last_seen || new Date().toISOString(),
+            created_at: data.created_at || new Date().toISOString(),
+            updated_at: data.updated_at || new Date().toISOString(),
+            email: data.email || ''
+          };
+          profiles.push(profile);
+          chatEngine.saveProfile(profile);
+        });
+        if (onUsersChanged) {
+          onUsersChanged(profiles);
+        }
+      },
+      (err) => {
+        console.warn('Real-time users snapshot listener warning:', err);
+      }
+    );
+  }
+
+  /**
+   * 5. User Search by @username or display name (Real-time Firestore Users)
    */
   async searchUsers(searchQuery: string = '', currentUid: string = ''): Promise<Profile[]> {
     const clean = searchQuery.trim().toLowerCase().replace(/^@/, '');
-
     const usersCol = collection(db, 'users');
-    const q = query(
-      usersCol,
-      where('isSearchable', '==', true)
-    );
 
-    const snapshot = await getDocs(q);
+    let snapshot;
+    try {
+      snapshot = await getDocs(usersCol);
+    } catch (err) {
+      console.warn('Firestore getDocs search users warning:', err);
+      return [];
+    }
+
     const results: Profile[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const pId = docSnap.id;
+      if (pId === currentUid) return;
 
-    snapshot.forEach(docSnap => {
-      const data = docSnap.data() as Profile;
-      if (data.id !== currentUid) {
-        if (!clean || data.username.toLowerCase().includes(clean) || data.display_name.toLowerCase().includes(clean)) {
-          results.push({ ...data, id: docSnap.id });
+      const profile: Profile = {
+        id: pId,
+        username: data.username || pId,
+        display_name: data.display_name || data.username || 'User',
+        bio: data.bio || '',
+        avatar_url: data.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
+        is_private: !!data.is_private,
+        isSearchable: data.isSearchable !== false,
+        is_online: data.is_online ?? true,
+        last_seen: data.last_seen || new Date().toISOString(),
+        created_at: data.created_at || new Date().toISOString(),
+        updated_at: data.updated_at || new Date().toISOString(),
+        email: data.email || ''
+      };
+
+      // Ensure profile is cached locally
+      chatEngine.saveProfile(profile);
+
+      const usernameLower = (profile.username || '').toLowerCase();
+      const displayNameLower = (profile.display_name || '').toLowerCase();
+
+      if (profile.is_private) {
+        // Private profile: require exact username search match
+        if (usernameLower === clean) {
+          results.push(profile);
+        }
+      } else {
+        // Public profile: match handle or display name
+        if (!clean || usernameLower.includes(clean) || displayNameLower.includes(clean)) {
+          results.push(profile);
         }
       }
     });
@@ -290,33 +436,28 @@ export class FirebaseAuthService {
    * 6. Direct Messaging & Chat Room creation
    */
   async getOrCreateDirectChat(currentUid: string, targetUid: string): Promise<string> {
-    const chatsCol = collection(db, 'chats');
-    const q = query(chatsCol, where('participants', 'array-contains', currentUid));
-    const snapshot = await getDocs(q);
-
-    let existingChatId: string | null = null;
-    snapshot.forEach(docSnap => {
-      const data = docSnap.data();
-      if (!data.is_group && Array.isArray(data.participants) && data.participants.includes(targetUid)) {
-        existingChatId = docSnap.id;
-      }
-    });
-
-    if (existingChatId) {
-      return existingChatId;
+    const directChatId = [currentUid, targetUid].sort().join('_direct_');
+    try {
+      const chatRef = doc(db, 'chats', directChatId);
+      await setDoc(chatRef, {
+        participants: [currentUid, targetUid],
+        is_group: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Error in getOrCreateDirectChat setDoc:', err);
     }
 
-    // Create new Chat Room
-    const newChatRef = await addDoc(chatsCol, {
-      participants: [currentUid, targetUid],
-      is_group: false,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      last_message: '',
-      last_message_time: new Date().toISOString()
-    });
+    return directChatId;
+  }
 
-    return newChatRef.id;
+  /**
+   * Ensure Firestore public room exists and currentUid is enrolled in participants (Disabled)
+   */
+  async ensureFirestorePublicRoom(_currentUid: string): Promise<void> {
+    // Disabled as requested
+    return;
   }
 
   /**
@@ -326,6 +467,10 @@ export class FirebaseAuthService {
     currentUid: string,
     onRoomsChange: (rooms: Room[]) => void
   ): () => void {
+    if (!currentUid) {
+      return () => {};
+    }
+
     const chatsCol = collection(db, 'chats');
     const q = query(chatsCol, where('participants', 'array-contains', currentUid));
 
@@ -377,8 +522,12 @@ export class FirebaseAuthService {
               }
             }
           });
-        } catch (e) {
-          console.error('Error calculating unread count in subscribeToUserChats:', e);
+        } catch (e: any) {
+          if (e?.code === 'unavailable' || e?.message?.includes('offline')) {
+            // Quietly ignore unread count error when offline
+          } else {
+            console.warn('Warning calculating unread count in subscribeToUserChats:', e?.message || e);
+          }
         }
 
         const room: Room = {
@@ -402,8 +551,12 @@ export class FirebaseAuthService {
       const rooms = await Promise.all(roomPromises);
       rooms.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
       onRoomsChange(rooms);
-    }, (err) => {
-      console.error('Error in subscribeToUserChats:', err);
+    }, (err: any) => {
+      if (err?.code === 'unavailable' || err?.message?.includes('offline')) {
+        console.warn('Firestore user chats subscription offline:', err?.message || err);
+      } else {
+        console.warn('Firestore user chats subscription warning:', err?.message || err);
+      }
     });
   }
 
@@ -415,13 +568,16 @@ export class FirebaseAuthService {
     currentUid: string,
     onMessagesChange: (messages: Message[]) => void
   ) {
+    if (!chatId || !currentUid) {
+      return () => {};
+    }
+
     const messagesCol = collection(db, 'chats', chatId, 'messages');
-    const q = query(messagesCol, orderBy('created_at', 'asc'));
     const channelKey = getRoomChannelKey(chatId);
 
     let isInitialLoad = true;
 
-    return onSnapshot(q, (snapshot) => {
+    return onSnapshot(messagesCol, (snapshot) => {
       const messages: Message[] = [];
 
       snapshot.docChanges().forEach((change) => {
@@ -458,10 +614,16 @@ export class FirebaseAuthService {
         });
       });
 
+      messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
       isInitialLoad = false;
       onMessagesChange(messages);
-    }, (error) => {
-      console.error('Error in chat messages snapshot:', error);
+    }, (error: any) => {
+      if (error?.code === 'unavailable' || error?.message?.includes('offline')) {
+        console.warn('Firestore chat messages subscription offline:', error?.message || error);
+      } else {
+        console.warn('Firestore chat messages snapshot warning:', error?.message || error);
+      }
     });
   }
 
@@ -524,7 +686,8 @@ export class FirebaseAuthService {
     type: string = 'text',
     attachmentUrl?: string,
     replyToId?: string,
-    audioDuration?: number
+    audioDuration?: number,
+    participantIds?: string[]
   ): Promise<string> {
     const channelKey = getRoomChannelKey(chatId);
     const encryptedContent = (type === 'text') ? encryptMessage(content, channelKey) : content;
@@ -546,9 +709,44 @@ export class FirebaseAuthService {
 
     const now = new Date().toISOString();
 
-    // Update parent chat doc (use setDoc with merge: true in case document was created locally or doesn't exist yet)
     const chatRef = doc(db, 'chats', chatId);
+    let chatSnap: any = null;
+    try {
+      chatSnap = await getDoc(chatRef);
+    } catch (e) {
+      // Handle offline or transient read failure
+    }
+
+    let existingParts: string[] = [];
+    if (chatSnap && chatSnap.exists() && Array.isArray(chatSnap.data()?.participants)) {
+      existingParts = chatSnap.data()?.participants;
+    }
+
+    let directParts: string[] = [];
+    if (chatId.includes('_direct_')) {
+      directParts = chatId.split('_direct_').filter(Boolean);
+    }
+
+    let extraParts: string[] = [];
+    if (typeof window !== 'undefined') {
+      try {
+        const rawParts = JSON.parse(localStorage.getItem('apex_chat_room_participants_v1') || '[]');
+        extraParts = rawParts.filter((p: any) => p.room_id === chatId).map((p: any) => p.user_id);
+      } catch {}
+    }
+
+    const mergedPartsSet = new Set<string>([
+      ...existingParts,
+      ...directParts,
+      ...extraParts,
+      senderId,
+      ...(participantIds || [])
+    ]);
+
+    const parts = Array.from(mergedPartsSet).filter(Boolean);
+
     await setDoc(chatRef, {
+      participants: parts.length > 0 ? parts : [senderId],
       last_message: encryptedContent,
       last_message_time: now,
       updated_at: now,
@@ -751,6 +949,38 @@ export class FirebaseAuthService {
       }, { merge: true });
     } catch (err) {
       console.error('Error clearing chat history in Firestore:', err);
+    }
+  }
+
+  /**
+   * Delete or leave a chat room in Firestore
+   */
+  async deleteFirestoreChat(chatId: string, currentUid: string): Promise<void> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      // When offline, local deletion is already handled by chatEngine
+      return;
+    }
+    try {
+      const chatDocRef = doc(db, 'chats', chatId);
+      const chatSnap = await getDoc(chatDocRef);
+      if (chatSnap.exists()) {
+        const data = chatSnap.data();
+        const participants: string[] = Array.isArray(data.participants) ? data.participants : [];
+        const updatedParticipants = participants.filter(uid => uid !== currentUid);
+        if (updatedParticipants.length === 0) {
+          await deleteDoc(chatDocRef);
+        } else {
+          await updateDoc(chatDocRef, {
+            participants: updatedParticipants,
+            updated_at: new Date().toISOString()
+          });
+        }
+      }
+    } catch (err: any) {
+      if (err?.code === 'unavailable' || err?.message?.includes('offline')) {
+        return;
+      }
+      console.warn('Could not sync chat deletion to Firestore:', err?.message || err);
     }
   }
 

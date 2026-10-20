@@ -18,18 +18,22 @@ export const UserSearchModal: React.FC<Props> = ({ isOpen, onClose, onSelectUser
     let isCancelled = false;
 
     if (isOpen) {
-      const localResults = chatEngine.searchUsers(query);
-      setResults(localResults);
-
       const currentUser = chatEngine.getCurrentUser();
       const currentUid = currentUser?.id || '';
+
+      const localResults = chatEngine.searchUsers(query).filter(p => p.id !== currentUid && p.id !== 'system');
+      setResults(localResults);
 
       firebaseAuthService.searchUsers(query, currentUid).then((fsResults) => {
         if (isCancelled) return;
         setResults((prev) => {
           const map = new Map<string, Profile>();
-          prev.forEach((p) => map.set(p.id, p));
-          fsResults.forEach((p) => map.set(p.id, p));
+          prev.forEach((p) => {
+            if (p.id !== currentUid && p.id !== 'system') map.set(p.id, p);
+          });
+          fsResults.forEach((p) => {
+            if (p.id !== currentUid && p.id !== 'system') map.set(p.id, p);
+          });
           return Array.from(map.values());
         });
       }).catch((err) => console.error('Firestore user search error:', err));
@@ -81,23 +85,32 @@ export const UserSearchModal: React.FC<Props> = ({ isOpen, onClose, onSelectUser
 
         {/* Search Results List */}
         <div id="user-search-results-list" className="p-4 overflow-y-auto flex-1 space-y-2">
-          {query.trim().length === 0 ? (
+          {results.length === 0 ? (
             <div className="py-8 text-center text-slate-400 text-xs space-y-2">
               <Sparkles className="w-8 h-8 mx-auto text-blue-500/40 animate-pulse" />
-              <p>Type a name or <code>@username</code> to search users</p>
-            </div>
-          ) : results.length === 0 ? (
-            <div className="py-8 text-center text-slate-400 text-xs">
-              <p className="font-semibold text-white">No users found for &quot;{query}&quot;</p>
-              <p className="text-[11px] text-slate-400 mt-1">If searching for a private account, make sure to include their exact <code>@username</code>.</p>
+              <p className="font-semibold text-white">
+                {query.trim() ? `No users found for "${query}"` : 'No other users found yet.'}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {query.trim() 
+                  ? 'If searching for a private account, make sure to include their exact @username.'
+                  : 'Users who sign up or join will automatically appear here in real-time.'}
+              </p>
             </div>
           ) : (
-            results.map((u) => (
-              <div
-                key={u.id}
-                id={`user-search-item-${u.username}`}
-                className="p-3 bg-[#0f1115] hover:bg-[#2d3139] border border-[#2d3139] rounded-xl flex items-center justify-between gap-3 transition-colors shadow-2xs group"
-              >
+            <>
+              {query.trim().length === 0 && (
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-1 mb-2 flex items-center justify-between">
+                  <span>Discovered Users & Contacts</span>
+                  <span className="text-blue-400 font-mono text-[10px]">{results.length} available</span>
+                </p>
+              )}
+              {results.map((u) => (
+                <div
+                  key={u.id}
+                  id={`user-search-item-${u.username}`}
+                  className="p-3 bg-[#0f1115] hover:bg-[#2d3139] border border-[#2d3139] rounded-xl flex items-center justify-between gap-3 transition-colors shadow-2xs group"
+                >
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="relative">
                     <img
@@ -131,6 +144,7 @@ export const UserSearchModal: React.FC<Props> = ({ isOpen, onClose, onSelectUser
                 <button
                   id={`start-chat-with-${u.username}`}
                   onClick={() => {
+                    chatEngine.saveProfile(u);
                     onSelectUserToChat(u);
                     onClose();
                   }}
@@ -139,7 +153,8 @@ export const UserSearchModal: React.FC<Props> = ({ isOpen, onClose, onSelectUser
                   Start Chat
                 </button>
               </div>
-            ))
+            ))}
+          </>
           )}
         </div>
       </div>

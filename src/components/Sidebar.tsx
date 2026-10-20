@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Room, Profile } from '../types';
 import { 
   MessageSquarePlus, 
@@ -10,9 +10,13 @@ import {
   Lock,
   MessageCircle,
   X,
-  Sparkles
+  Phone,
+  Share2,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
-import { chatEngine, AI_ASSISTANT_PROFILE } from '../services/chatEngine';
+import { chatEngine } from '../services/chatEngine';
+import { firebaseAuthService } from '../services/firebaseAuthService';
 
 interface Props {
   currentUser: Profile;
@@ -22,6 +26,7 @@ interface Props {
   onOpenNewChat: () => void;
   onOpenNewGroup: () => void;
   onOpenSettings: () => void;
+  onOpenCallHistory?: () => void;
 }
 
 export const Sidebar: React.FC<Props> = ({
@@ -32,24 +37,70 @@ export const Sidebar: React.FC<Props> = ({
   onOpenNewChat,
   onOpenNewGroup,
   onOpenSettings,
+  onOpenCallHistory,
 }) => {
   const [filter, setFilter] = useState<'all' | 'unread' | 'groups'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [roomToDelete, setRoomToDelete] = useState<{ id: string; name: string } | null>(null);
+
+  const pressTimerRef = useRef<any>(null);
 
   const totalUnreadCount = rooms.reduce((acc, r) => acc + (r.unread_count || 0), 0);
 
-  const filteredRooms = rooms.filter((r) => {
+  const handleTouchStart = (roomId: string, name: string) => {
+    pressTimerRef.current = setTimeout(() => {
+      setRoomToDelete({ id: roomId, name });
+    }, 500);
+  };
+
+  const handleTouchEnd = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, roomId: string, name: string) => {
+    e.preventDefault();
+    setRoomToDelete({ id: roomId, name });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (roomToDelete) {
+      const targetRoomId = roomToDelete.id;
+      chatEngine.deleteRoom(targetRoomId);
+      if (currentUser?.id) {
+        firebaseAuthService.deleteFirestoreChat(targetRoomId, currentUser.id).catch(() => {});
+      }
+      if (targetRoomId === activeRoomId) {
+        const remaining = filteredRooms.filter(r => r.id !== targetRoomId);
+        if (remaining.length > 0) {
+          onSelectRoom(remaining[0].id);
+        } else {
+          onSelectRoom('');
+        }
+      }
+      setRoomToDelete(null);
+    }
+  };
+
+  // Deduplicate rooms by ID to prevent duplicate React keys, strictly filter 1-on-1 direct rooms
+  const uniqueRoomsMap = new Map<string, Room>();
+  rooms.forEach(r => {
+    if (r && r.id && !r.is_group && r.id !== 'room-general' && !r.name?.includes('Public Community') && !uniqueRoomsMap.has(r.id)) {
+      uniqueRoomsMap.set(r.id, r);
+    }
+  });
+  const uniqueRooms = Array.from(uniqueRoomsMap.values());
+
+  const filteredRooms = uniqueRooms.filter((r) => {
     // Filter type
     if (filter === 'unread' && (!r.unread_count || r.unread_count === 0)) return false;
-    if (filter === 'groups' && !r.is_group) return false;
 
     // Search query
     if (!searchQuery.trim()) return true;
 
     const query = searchQuery.toLowerCase();
-    
-    // Group name match
-    if (r.is_group && r.name?.toLowerCase().includes(query)) return true;
 
     // Contact name or username match
     const otherProfiles = r.participant_profiles?.filter((p) => p.id !== currentUser.id) || [];
@@ -82,15 +133,6 @@ export const Sidebar: React.FC<Props> = ({
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  const handleOpenAiStudioChat = () => {
-    try {
-      const room = chatEngine.getOrCreatePrivateRoom(AI_ASSISTANT_PROFILE.id);
-      onSelectRoom(room.id);
-    } catch (err) {
-      console.warn("Failed to open AI Assistant chat:", err);
-    }
-  };
-
   return (
     <aside id="chat-sidebar" className="w-full md:w-80 lg:w-96 bg-[#1a1c20] border-r border-[#2d3139] flex flex-col h-full shrink-0">
       {/* Top Header */}
@@ -118,23 +160,16 @@ export const Sidebar: React.FC<Props> = ({
 
         {/* Action Buttons */}
         <div id="sidebar-action-buttons" className="flex items-center gap-1.5">
-          <button
-            id="open-new-group-btn"
-            onClick={onOpenNewGroup}
-            className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-[#2d3139] rounded-xl transition-colors"
-            title="Create New Group"
-          >
-            <Users className="w-4 h-4" />
-          </button>
-
-          <button
-            id="open-settings-btn"
-            onClick={onOpenSettings}
-            className="p-2 text-slate-400 hover:text-white hover:bg-[#2d3139] rounded-xl transition-colors"
-            title="Settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          {onOpenCallHistory && (
+            <button
+              id="open-call-history-btn"
+              onClick={onOpenCallHistory}
+              className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-[#2d3139] rounded-xl transition-colors"
+              title="Call Logs & History"
+            >
+              <Phone className="w-4 h-4" />
+            </button>
+          )}
 
           <button
             id="open-new-chat-btn"
@@ -200,26 +235,6 @@ export const Sidebar: React.FC<Props> = ({
               </span>
             )}
           </button>
-          <button
-            id="filter-groups-btn"
-            onClick={() => setFilter('groups')}
-            className={`px-3 py-1 rounded-xl text-[11px] font-semibold transition-all ${
-              filter === 'groups'
-                ? 'bg-blue-600 text-white shadow-2xs'
-                : 'bg-[#0f1115] text-[#94a3b8] hover:bg-[#2d3139] border border-[#2d3139]'
-            }`}
-          >
-            Groups
-          </button>
-          <button
-            id="filter-ai-assistant-btn"
-            onClick={handleOpenAiStudioChat}
-            className="px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/40 flex items-center gap-1 shadow-sm"
-            title="Chat with Google AI Studio Assistant"
-          >
-            <Sparkles className="w-3 h-3 text-emerald-400 animate-spin" />
-            <span>AI Studio</span>
-          </button>
         </div>
       </div>
 
@@ -242,22 +257,41 @@ export const Sidebar: React.FC<Props> = ({
           filteredRooms.map((room) => {
             const isSelected = room.id === activeRoomId;
             const otherProfiles = room.participant_profiles?.filter((p) => p.id !== currentUser.id) || [];
-            const otherUser = otherProfiles[0];
+            let otherUser = otherProfiles[0];
+
+            if (!otherUser && !room.is_group) {
+              const allProfiles = chatEngine.getAllProfiles();
+              otherUser = allProfiles.find(p => p.id !== currentUser.id);
+            }
 
             const roomTitle = room.is_group
-              ? room.name
-              : otherUser?.display_name || 'Private Chat';
+              ? (room.name || 'Group Chat')
+              : (otherUser?.display_name || room.name || 'Private Chat');
 
             const roomAvatar = room.is_group
               ? 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&q=80&w=250'
               : otherUser?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250';
 
             return (
-              <button
+              <div
                 key={room.id}
                 id={`room-item-${room.id}`}
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelectRoom(room.id)}
-                className={`w-full px-4 py-3.5 flex items-center gap-3 text-left transition-all relative ${
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectRoom(room.id);
+                  }
+                }}
+                onTouchStart={() => handleTouchStart(room.id, roomTitle)}
+                onTouchEnd={handleTouchEnd}
+                onMouseDown={() => handleTouchStart(room.id, roomTitle)}
+                onMouseUp={handleTouchEnd}
+                onMouseLeave={handleTouchEnd}
+                onContextMenu={(e) => handleContextMenu(e, room.id, roomTitle)}
+                className={`w-full px-4 py-3.5 flex items-center gap-3 text-left transition-all relative group cursor-pointer ${
                   isSelected ? 'bg-[#2d3139] border-l-4 border-blue-500' : 'hover:bg-[#2d3139]/60 border-l-4 border-transparent'
                 }`}
               >
@@ -276,13 +310,26 @@ export const Sidebar: React.FC<Props> = ({
                       <Users className="w-2.5 h-2.5 text-blue-400" />
                     </span>
                   ) : null}
+
+                  {/* Avatar Unread Overlay Badge */}
+                  {room.unread_count && room.unread_count > 0 ? (
+                    <span
+                      id={`unread-avatar-badge-${room.id}`}
+                      className="absolute -top-1 -right-1 w-5 h-5 bg-emerald-500 text-slate-950 font-black text-[10px] rounded-full ring-2 ring-[#1a1c20] flex items-center justify-center shadow-lg animate-pulse"
+                      title={`${room.unread_count} unread message${room.unread_count > 1 ? 's' : ''}`}
+                    >
+                      {room.unread_count > 99 ? '99+' : room.unread_count}
+                    </span>
+                  ) : null}
                 </div>
 
                 {/* Info & Last Message */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-1">
                     <div className="flex items-center gap-1.5 truncate">
-                      <h3 className="text-[14px] font-semibold text-[#f8fafc] truncate">{roomTitle}</h3>
+                      <h3 className={`text-[14px] truncate ${room.unread_count && room.unread_count > 0 ? 'font-extrabold text-white' : 'font-semibold text-[#f8fafc]'}`}>
+                        {roomTitle}
+                      </h3>
                       {!room.is_group && otherUser?.username ? (
                         <span className="text-[11px] font-mono text-emerald-400 opacity-90 truncate shrink-0">@{otherUser.username}</span>
                       ) : null}
@@ -290,31 +337,81 @@ export const Sidebar: React.FC<Props> = ({
                         <Lock className="w-3 h-3 text-amber-400 shrink-0" title="Private Account" />
                       ) : null}
                     </div>
-                    <span className="text-[11px] text-[#64748b] shrink-0 font-medium">
+                    <span className={`text-[11px] shrink-0 font-medium ${room.unread_count && room.unread_count > 0 ? 'text-emerald-400 font-extrabold' : 'text-[#64748b]'}`}>
                       {formatRoomTime(room.last_message_time)}
                     </span>
                   </div>
 
                   <div className="flex items-center justify-between gap-1">
-                    <p className="text-[13px] text-[#94a3b8] truncate flex-1">
+                    <p className={`text-[13px] truncate flex-1 ${room.unread_count && room.unread_count > 0 ? 'font-bold text-slate-100' : 'text-[#94a3b8]'}`}>
                       {room.last_message_text || 'No messages yet'}
                     </p>
 
-                    {/* Unread Pill Counter Badge */}
-                    {room.unread_count && room.unread_count > 0 ? (
-                      <span className="px-2 py-0.5 bg-emerald-500 text-slate-950 font-extrabold rounded-full text-[11px] shrink-0 min-w-[20px] text-center shadow-xs animate-pulse">
-                        {room.unread_count > 99 ? '99+' : room.unread_count}
-                      </span>
-                    ) : (
-                      <CheckCheck className="w-3.5 h-3.5 text-blue-400 shrink-0 opacity-80" />
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Delete button icon visible on desktop hover */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRoomToDelete({ id: room.id, name: roomTitle });
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-400 hover:bg-[#383d47] rounded-lg transition-all"
+                        title="Remove chat"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Unread Message Badge */}
+                      {room.unread_count && room.unread_count > 0 ? (
+                        <span
+                          id={`unread-badge-${room.id}`}
+                          className="px-2 py-0.5 bg-emerald-500 text-slate-950 font-black rounded-full text-[11px] min-w-[22px] text-center shadow-md animate-pulse border border-emerald-300 flex items-center justify-center leading-none"
+                          title={`${room.unread_count} unread message${room.unread_count > 1 ? 's' : ''}`}
+                        >
+                          {room.unread_count > 99 ? '99+' : room.unread_count}
+                        </span>
+                      ) : (
+                        <CheckCheck className="w-3.5 h-3.5 text-blue-400 opacity-80" />
+                      )}
+                    </div>
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })
         )}
       </div>
+
+      {/* Long Press / Delete Confirmation Modal */}
+      {roomToDelete && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-[#1a1c20] border border-[#2d3139] rounded-2xl p-5 max-w-sm w-full text-center space-y-4 shadow-2xl">
+            <div className="w-12 h-12 bg-red-500/10 text-red-400 rounded-full flex items-center justify-center mx-auto border border-red-500/20">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white mb-1">Remove Chat</h3>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Are you sure you want to remove <span className="font-semibold text-white">{roomToDelete.name}</span> from your chat list?
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                onClick={() => setRoomToDelete(null)}
+                className="flex-1 py-2 px-4 bg-[#2d3139] hover:bg-[#383d47] text-slate-200 text-xs font-semibold rounded-xl transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2 px-4 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 shadow-md"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 };

@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, Minimize2, Maximize2, Monitor, RefreshCw, Signal, Pencil } from 'lucide-react';
+import { Phone, PhoneOff, Video, VideoOff, Mic, MicOff, Minimize2, Maximize2, Monitor, RefreshCw, Signal } from 'lucide-react';
 import { CallSession } from '../types';
 import { webrtcCallService } from '../services/webrtcCallService';
-import { CollaborativeWhiteboard } from './CollaborativeWhiteboard';
 
 interface Props {
   activeCall: CallSession | null;
@@ -32,8 +31,9 @@ export const CallModal: React.FC<Props> = ({
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [screenShareNotice, setScreenShareNotice] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
+  const screenStreamRef = useRef<MediaStream | null>(null);
 
   // Attach local stream to video ref
   useEffect(() => {
@@ -106,15 +106,54 @@ export const CallModal: React.FC<Props> = ({
   const handleToggleScreenShare = async () => {
     if (!isScreenSharing) {
       try {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        setIsScreenSharing(true);
-        if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
-      } catch (err) {
-        console.error('Screen sharing error:', err);
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false
+        });
+        screenStreamRef.current = screenStream;
+        const screenTrack = screenStream.getVideoTracks()[0];
+
+        if (screenTrack) {
+          // Replace track on WebRTC peer connection so remote participant sees screen share
+          await webrtcCallService.replaceVideoTrack(screenTrack);
+          setIsScreenSharing(true);
+
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = screenStream;
+          }
+
+          // Automatically revert when user stops sharing via browser bar
+          screenTrack.onended = async () => {
+            setIsScreenSharing(false);
+            screenStreamRef.current = null;
+            if (localStream && localStream.getVideoTracks().length > 0) {
+              await webrtcCallService.replaceVideoTrack(localStream.getVideoTracks()[0]);
+              if (localVideoRef.current) {
+                localVideoRef.current.srcObject = localStream;
+              }
+            }
+          };
+        }
+      } catch (err: any) {
+        console.warn('Screen sharing cancelled or error:', err);
+        const errStr = String(err?.message || err);
+        if (errStr.includes('display-capture') || errStr.includes('permissions policy') || err?.name === 'NotAllowedError') {
+          setScreenShareNotice('Screen capture is restricted in preview frame. Please open the app in a new tab to share your screen.');
+          setTimeout(() => setScreenShareNotice(null), 6000);
+        }
       }
     } else {
       setIsScreenSharing(false);
-      if (localVideoRef.current && localStream) localVideoRef.current.srcObject = localStream;
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((t) => t.stop());
+        screenStreamRef.current = null;
+      }
+      if (localStream && localStream.getVideoTracks().length > 0) {
+        await webrtcCallService.replaceVideoTrack(localStream.getVideoTracks()[0]);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = localStream;
+        }
+      }
     }
   };
 
@@ -229,6 +268,12 @@ export const CallModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 animate-fade-in">
       <div className="relative w-full max-w-3xl h-[80vh] max-h-[600px] bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
         {/* Header Bar */}
+        {screenShareNotice && (
+          <div className="absolute top-16 left-4 right-4 z-50 bg-amber-500/90 text-slate-950 font-bold text-xs p-3 rounded-2xl shadow-xl border border-amber-300 flex items-center justify-between animate-in fade-in">
+            <span>{screenShareNotice}</span>
+            <button onClick={() => setScreenShareNotice(null)} className="ml-2 font-mono hover:opacity-75">✕</button>
+          </div>
+        )}
         <div className="absolute top-0 inset-x-0 z-20 p-4 bg-gradient-to-b from-slate-950/80 to-transparent flex items-center justify-between text-white">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full overflow-hidden border border-slate-700">
@@ -268,7 +313,7 @@ export const CallModal: React.FC<Props> = ({
             playsInline
             onError={(e) => { e.preventDefault(); e.stopPropagation(); }}
             className="w-full h-full object-cover"
-            id="remote-video-stream"
+            id="remoteVideo"
           />
 
           {/* Audio Avatar Overlay if Audio Call */}
@@ -294,7 +339,7 @@ export const CallModal: React.FC<Props> = ({
                 muted
                 onError={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 className="w-full h-full object-cover"
-                id="local-video-stream"
+                id="localVideo"
               />
             </div>
           )}
@@ -335,14 +380,6 @@ export const CallModal: React.FC<Props> = ({
           )}
 
           <button
-            onClick={() => setShowWhiteboard(true)}
-            className="w-12 h-12 rounded-full flex items-center justify-center transition-colors shadow-md bg-sky-600/30 hover:bg-sky-600/50 text-sky-400 border border-sky-500/40"
-            title="Open Collaborative Whiteboard"
-          >
-            <Pencil size={20} />
-          </button>
-
-          <button
             onClick={onEndCall}
             className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center shadow-lg transition-transform active:scale-95"
           >
@@ -350,15 +387,6 @@ export const CallModal: React.FC<Props> = ({
           </button>
         </div>
       </div>
-
-      {showWhiteboard && activeCall && (
-        <CollaborativeWhiteboard
-          boardId={`call-${activeCall.id}`}
-          currentUserId={currentUserId}
-          currentUserName={peerName}
-          onClose={() => setShowWhiteboard(false)}
-        />
-      )}
     </div>
   );
 };

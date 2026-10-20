@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { safeStorage } from '../utils/safeStorage';
 
 export interface ChatThemePattern {
   id: string;
@@ -125,13 +126,9 @@ const bubbleListeners: Set<BubbleColorListener> = new Set();
 
 export const chatThemeService = {
   getThemePattern(): string {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved && CHAT_THEME_PATTERNS.some(p => p.id === saved)) {
-        return saved;
-      }
-    } catch {
-      // Fallback
+    const saved = safeStorage.getItem(STORAGE_KEY);
+    if (saved && CHAT_THEME_PATTERNS.some(p => p.id === saved)) {
+      return saved;
     }
     return 'doodle';
   },
@@ -142,11 +139,7 @@ export const chatThemeService = {
 
   setThemePattern(id: string): void {
     if (!CHAT_THEME_PATTERNS.some(p => p.id === id)) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, id);
-    } catch {
-      // LocalStorage error fallback
-    }
+    safeStorage.setItem(STORAGE_KEY, id);
     listeners.forEach(fn => fn(id));
   },
 
@@ -158,24 +151,16 @@ export const chatThemeService = {
   },
 
   getBubbleColor(): string {
-    try {
-      const saved = localStorage.getItem(BUBBLE_STORAGE_KEY);
-      if (saved && /^#[0-9A-Fa-f]{6}$/.test(saved)) {
-        return saved;
-      }
-    } catch {
-      // Fallback
+    const saved = safeStorage.getItem(BUBBLE_STORAGE_KEY);
+    if (saved && /^#[0-9A-Fa-f]{6}$/.test(saved)) {
+      return saved;
     }
     return '#059669'; // Default Emerald Green
   },
 
   setBubbleColor(colorHex: string): void {
     if (!/^#[0-9A-Fa-f]{6}$/.test(colorHex)) return;
-    try {
-      localStorage.setItem(BUBBLE_STORAGE_KEY, colorHex);
-    } catch {
-      // Fallback
-    }
+    safeStorage.setItem(BUBBLE_STORAGE_KEY, colorHex);
     bubbleListeners.forEach(fn => fn(colorHex));
   },
 

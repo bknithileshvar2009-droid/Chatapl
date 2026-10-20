@@ -107,8 +107,13 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onLoginSuccess }) => {
     }
   };
 
-  const handleGoogleSelect = (email: string, name?: string, avatar?: string) => {
+  const handleGoogleSelect = async (email: string, name?: string, avatar?: string) => {
     const user = chatEngine.loginWithGoogle(email, name, avatar);
+    try {
+      await firebaseAuthService.syncUserProfile(user);
+    } catch (e) {
+      console.warn('Sync profile error:', e);
+    }
     setShowGoogleModal(false);
     onLoginSuccess(user);
   };
@@ -123,15 +128,19 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onLoginSuccess }) => {
   return (
     <div id="auth-modal-overlay" className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-300">
       <div id="auth-card" className="bg-[#1a1c20] rounded-3xl shadow-2xl w-full max-w-md border border-[#2d3139] overflow-hidden text-[#f8fafc] flex flex-col max-h-[90vh]">
-        {/* Top Banner */}
-        <div id="auth-banner" className="px-6 py-6 bg-gradient-to-br from-[#1a1c20] via-[#2d3139] to-[#0f1115] text-white text-center relative overflow-hidden border-b border-[#2d3139] shrink-0">
-          <div className="absolute -right-8 -top-8 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl" />
+        {/* Top Banner with Glowing Blue/Turquoise/Violet Gradients */}
+        <div id="auth-banner" className="px-6 py-7 bg-gradient-to-br from-[#0c101c] via-[#121829] to-[#181128] text-white text-center relative overflow-hidden border-b border-[#23293a] shrink-0">
+          <div className="absolute -left-10 -top-10 w-40 h-40 bg-blue-500/20 rounded-full blur-3xl animate-pulse" />
+          <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-purple-500/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-cyan-500/15 rounded-full blur-3xl" />
+          
           <div className="relative z-10 flex flex-col items-center">
-            <div id="auth-app-logo" className="p-2.5 bg-blue-600/20 rounded-2xl backdrop-blur-md border border-blue-500/30 mb-2 shadow-lg">
-              <MessageCircle className="w-7 h-7 text-blue-400" />
+            <div id="auth-app-logo" className="p-3 bg-gradient-to-br from-blue-500/20 via-cyan-500/20 to-purple-500/20 rounded-2xl backdrop-blur-md border border-cyan-500/30 mb-2.5 shadow-xl ring-1 ring-cyan-400/20">
+              <MessageCircle className="w-8 h-8 text-cyan-400" />
             </div>
-            <h1 className="text-xl font-extrabold text-white tracking-tight">NEXUS CHAT</h1>
-            <p className="text-xs text-slate-400 mt-0.5">Private messaging with Gmail account protection</p>
+            <h1 className="text-2xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-300 to-purple-400 drop-shadow-sm">NEX CHAT</h1>
+            <p className="text-[11px] font-bold text-cyan-400 tracking-widest uppercase mt-1">Created by BKN BRAIN</p>
+            <p className="text-[11px] text-slate-400 mt-1">Instant Messaging • AI Smart Replies • Realtime Sync</p>
           </div>
         </div>
 

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { Profile, UserStatusStory } from '../types';
 import { statusStoryService } from '../services/statusStoryService';
-import { VIJAY_MUSIC_CATALOG, VijayTrack, playVijayTrackLiveSynth, stopVijayTrackLiveSynth } from '../utils/vijayMusicSynth';
+import { VIJAY_MUSIC_CATALOG, VijayTrack, playVijayTrackLiveSynth, stopVijayTrackLiveSynth, playVijayAudioTrack, unlockAudioContext, generateVijaySongAudioWav } from '../utils/vijayMusicSynth';
 
 interface Props {
   currentUser: Profile;
@@ -74,16 +74,30 @@ export const StatusStoriesBar: React.FC<Props> = ({ currentUser, isFullTab = fal
     if (activeStoryGroup && activeStoryGroup[activeStoryIdx]) {
       const story = activeStoryGroup[activeStoryIdx];
       if (story.musicUrl) {
+        unlockAudioContext();
         if (viewerAudioRef.current) {
           viewerAudioRef.current.pause();
+          viewerAudioRef.current = null;
         }
         const audio = new Audio(story.musicUrl);
+        let hasFallenBack = false;
         audio.onerror = () => {
-          // Silently handle media load error if track fails
+          if (!hasFallenBack && story.musicTrackId) {
+            hasFallenBack = true;
+            const synthWav = generateVijaySongAudioWav(story.musicTrackId);
+            audio.src = synthWav;
+            audio.load();
+            audio.play().catch((err) => console.warn('Viewer fallback audio play error:', err));
+          }
         };
         audio.loop = true;
         audio.muted = isViewerAudioMuted;
-        audio.play().catch(() => {});
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('Story audio autoplay prevented or error:', err);
+          });
+        }
         viewerAudioRef.current = audio;
       } else if (viewerAudioRef.current) {
         viewerAudioRef.current.pause();
@@ -97,31 +111,32 @@ export const StatusStoriesBar: React.FC<Props> = ({ currentUser, isFullTab = fal
     return () => {
       if (viewerAudioRef.current) {
         viewerAudioRef.current.pause();
+        viewerAudioRef.current = null;
       }
     };
   }, [activeStoryGroup, activeStoryIdx, isViewerAudioMuted]);
 
   // Handle music preview in creator modal
   const handleTogglePreviewTrack = (track: TamilMusicTrack) => {
+    unlockAudioContext();
     if (!track.url && !track.id) return;
     if (previewTrackId === track.id) {
       if (previewAudioRef.current) {
         previewAudioRef.current.pause();
+        previewAudioRef.current = null;
       }
       stopVijayTrackLiveSynth();
       setPreviewTrackId(null);
     } else {
       if (previewAudioRef.current) {
         previewAudioRef.current.pause();
+        previewAudioRef.current = null;
       }
       stopVijayTrackLiveSynth();
-      if (track.url) {
-        const audio = new Audio(track.url);
-        audio.onerror = () => {};
-        audio.play().catch(() => {});
-        previewAudioRef.current = audio;
-      }
-      playVijayTrackLiveSynth(track.id);
+
+      playVijayAudioTrack(track, (createdAudio) => {
+        previewAudioRef.current = createdAudio;
+      });
       setPreviewTrackId(track.id);
     }
   };
@@ -188,6 +203,8 @@ export const StatusStoriesBar: React.FC<Props> = ({ currentUser, isFullTab = fal
         id: `custom-${Date.now()}`,
         title: file.name.replace(/\.[^/.]+$/, ''),
         artist: 'My Upload',
+        movie: 'Custom',
+        bpm: 120,
         views: 'Custom Audio',
         category: 'Custom',
         url: dataUrl

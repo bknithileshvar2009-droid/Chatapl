@@ -14,7 +14,6 @@ import { VoiceMessageBubble } from './VoiceMessageBubble';
 import { GroupInfoModal } from './GroupInfoModal';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { MiniAppContainer } from './MiniAppContainer';
-import { CollaborativeWhiteboard } from './CollaborativeWhiteboard';
 import { useLocalInference } from '../hooks/useLocalInference';
 import { 
   ArrowLeft, 
@@ -100,7 +99,6 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
   const [miniAppType, setMiniAppType] = useState<'tickets' | 'food' | 'payment' | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showMiniAppMenu, setShowMiniAppMenu] = useState(false);
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
 
   // Enterprise AI Smart Reply, Ephemeral & Offline state
   const [smartReplies, setSmartReplies] = useState<string[]>([]);
@@ -218,6 +216,14 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAddEmoji = (emoji: string) => {
+    setText((prev) => prev + emoji);
+    setTimeout(() => {
+      textInputRef.current?.focus();
+    }, 10);
+  };
 
   // Close reaction popup on outside click
   useEffect(() => {
@@ -250,7 +256,8 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
     setMessages(chatEngine.getMessages(room.id));
 
     const unsubscribeMsgs = chatEngine.subscribeMessages(() => {
-      setMessages(chatEngine.getMessages(room.id));
+      const localMsgs = chatEngine.getMessages(room.id);
+      setMessages(localMsgs);
       chatEngine.markRoomAsRead(room.id);
     });
 
@@ -260,10 +267,10 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
         room.id,
         currentUser.id,
         (firestoreMsgs) => {
-          if (firestoreMsgs && firestoreMsgs.length > 0) {
-            setMessages(firestoreMsgs);
-            firebaseAuthService.markMessagesAsRead(room.id, currentUser.id);
-          }
+          chatEngine.saveMessages(room.id, firestoreMsgs || []);
+          const updatedMsgs = chatEngine.getMessages(room.id);
+          setMessages(updatedMsgs);
+          firebaseAuthService.markMessagesAsRead(room.id, currentUser.id);
         }
       );
     } catch {
@@ -277,9 +284,13 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
           const prof = profiles.find(p => p.id === status.userId);
           const roomParticipants = room.participant_profiles?.filter(p => p.id !== currentUser.id) || [];
           const matchedPart = roomParticipants.find(p => p.id === status.userId);
-          const displayName = prof?.display_name || matchedPart?.display_name || 'Someone';
 
-          setTypingUser(displayName);
+          const rawName = status.displayName || prof?.display_name || matchedPart?.display_name || status.username || prof?.username || 'Member';
+          const username = status.username || prof?.username || matchedPart?.username;
+          const handle = username ? ` (@${username})` : '';
+          const typingNameWithUsername = `${rawName}${handle}`;
+
+          setTypingUser(typingNameWithUsername);
 
           if (remoteTypingTimeoutRef.current) clearTimeout(remoteTypingTimeoutRef.current);
           remoteTypingTimeoutRef.current = setTimeout(() => {
@@ -304,9 +315,13 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
             const prof = profiles.find(p => p.id === firstTypingId);
             const roomParticipants = room.participant_profiles?.filter(p => p.id !== currentUser.id) || [];
             const matchedPart = roomParticipants.find(p => p.id === firstTypingId);
-            const displayName = prof?.display_name || matchedPart?.display_name || 'Someone';
 
-            setTypingUser(displayName);
+            const rawName = prof?.display_name || matchedPart?.display_name || prof?.username || 'Member';
+            const username = prof?.username || matchedPart?.username;
+            const handle = username ? ` (@${username})` : '';
+            const typingNameWithUsername = `${rawName}${handle}`;
+
+            setTypingUser(typingNameWithUsername);
           } else {
             setTypingUser(null);
           }
@@ -352,15 +367,38 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
 
   const handleSendText = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!text.trim()) return;
-
     const rawContent = text.trim();
+    if (!rawContent) return;
+
     const replyId = replyToMessage?.id;
+
+    // Immediately remove text from message bar on send
+    setText('');
     setReplyToMessage(null);
+    setSmartReplies([]);
+    setShowEmojiPicker(false);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    chatEngine.setTyping(room.id, false, currentUser.id);
+    firebaseAuthService.setFirestoreTyping(room.id, currentUser.id, false);
+
+    // Maintain focus and auto-scroll
+    setTimeout(() => {
+      textInputRef.current?.focus();
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 10);
 
     // E2EE encryption layer
     const encrypted = e2eEncryptionService.encryptMessage(rawContent);
     const expiresAt = e2eEncryptionService.calculateEphemeralExpiration(disappearingTimer);
+
+    const participantIds = Array.from(new Set([
+      currentUser.id,
+      ...(room.participant_profiles?.map(p => p.id) || []),
+      ...room.id.split('_direct_').filter(Boolean)
+    ]));
+
+    // Save to local chat engine immediately for instant UI & BroadcastChannel tab sync
+    chatEngine.sendMessage(room.id, rawContent, 'text', undefined, replyId);
 
     if (!isOnline) {
       // Offline message queue
@@ -376,29 +414,58 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
         expires_at: expiresAt
       };
       offlineSyncService.enqueueMessage(room.id, queuedMsg);
-      setMessages((prev) => [...prev, queuedMsg]);
     } else {
-      await firebaseAuthService.sendFirestoreMessage(
+      firebaseAuthService.sendFirestoreMessage(
         room.id,
         currentUser.id,
         rawContent,
         'text',
         undefined,
-        replyId
-      );
+        replyId,
+        undefined,
+        participantIds
+      ).catch((err) => {
+        console.warn('Firestore send failed, storing in offline queue:', err);
+        const queuedMsg: Message = {
+          id: 'msg_offline_' + Date.now(),
+          room_id: room.id,
+          sender_id: currentUser.id,
+          content: rawContent,
+          type: 'text',
+          status: 'queued',
+          created_at: new Date().toISOString(),
+          is_queued_offline: true,
+          expires_at: expiresAt
+        };
+        offlineSyncService.enqueueMessage(room.id, queuedMsg);
+      });
     }
-
-    setText('');
-    setSmartReplies([]);
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    chatEngine.setTyping(room.id, false, currentUser.id);
-    firebaseAuthService.setFirestoreTyping(room.id, currentUser.id, false);
-    setShowEmojiPicker(false);
   };
 
   const handleSendTextCustom = async (customText: string) => {
-    if (!customText.trim()) return;
     const rawContent = customText.trim();
+    if (!rawContent) return;
+
+    // Immediately remove text from message bar on custom send (e.g. AI smart reply)
+    setText('');
+    setSmartReplies([]);
+    setShowEmojiPicker(false);
+    setReplyToMessage(null);
+
+    setTimeout(() => {
+      textInputRef.current?.focus();
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 10);
+
+    const participantIds = Array.from(new Set([
+      currentUser.id,
+      ...(room.participant_profiles?.map(p => p.id) || []),
+      ...room.id.split('_direct_').filter(Boolean)
+    ]));
+    
+    // Save to local chat engine immediately for instant UI & BroadcastChannel tab sync
+    chatEngine.sendMessage(room.id, rawContent, 'text');
+
     if (!isOnline) {
       const queuedMsg: Message = {
         id: 'msg_offline_' + Date.now(),
@@ -407,18 +474,34 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
         content: rawContent,
         type: 'text',
         created_at: new Date().toISOString(),
-        status: 'sent',
+        status: 'queued',
         is_queued_offline: true
       };
       offlineSyncService.enqueueMessage(room.id, queuedMsg);
-      setMessages((prev) => [...prev, queuedMsg]);
     } else {
-      await firebaseAuthService.sendFirestoreMessage(
+      firebaseAuthService.sendFirestoreMessage(
         room.id,
         currentUser.id,
         rawContent,
-        'text'
-      );
+        'text',
+        undefined,
+        undefined,
+        undefined,
+        participantIds
+      ).catch((err) => {
+        console.warn('Firestore custom send failed, storing in offline queue:', err);
+        const queuedMsg: Message = {
+          id: 'msg_offline_' + Date.now(),
+          room_id: room.id,
+          sender_id: currentUser.id,
+          content: rawContent,
+          type: 'text',
+          created_at: new Date().toISOString(),
+          status: 'queued',
+          is_queued_offline: true
+        };
+        offlineSyncService.enqueueMessage(room.id, queuedMsg);
+      });
     }
   };
 
@@ -449,6 +532,11 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
 
       const replyId = replyToMessage?.id;
       setReplyToMessage(null);
+      const participantIds = Array.from(new Set([
+        currentUser.id,
+        ...(room.participant_profiles?.map(p => p.id) || []),
+        ...room.id.split('_direct_').filter(Boolean)
+      ]));
 
       if (isOnline) {
         await firebaseAuthService.sendFirestoreMessage(
@@ -458,7 +546,8 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
           'audio',
           audioUrl,
           replyId,
-          duration
+          duration,
+          participantIds
         );
       }
 
@@ -483,13 +572,29 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
     try {
       const replyId = replyToMessage?.id;
       setReplyToMessage(null);
+      const participantIds = Array.from(new Set([
+        currentUser.id,
+        ...(room.participant_profiles?.map(p => p.id) || []),
+        ...room.id.split('_direct_').filter(Boolean)
+      ]));
+
+      chatEngine.sendMessage(
+        room.id,
+        caption || '📷 Photo',
+        'image',
+        dataUrl,
+        replyId
+      );
+
       await firebaseAuthService.sendFirestoreMessage(
         room.id,
         currentUser.id,
         caption || '📷 Photo',
         'image',
         dataUrl,
-        replyId
+        replyId,
+        undefined,
+        participantIds
       );
     } catch (err) {
       console.error('Error sending photo:', err);
@@ -542,7 +647,6 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
       // Send via ChatEngine
       chatEngine.sendMessage(
         targetRoom.id,
-        currentUser.id,
         rawContent,
         forwardMessage.type,
         forwardMessage.attachment_url
@@ -555,19 +659,32 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
   };
 
   const otherProfiles = room.participant_profiles?.filter((p) => p.id !== currentUser.id) || [];
-  const otherUser = otherProfiles[0];
+  let otherUser = otherProfiles[0];
+
+  if (!otherUser && !room.is_group) {
+    const allProfiles = chatEngine.getAllProfiles();
+    otherUser = allProfiles.find(p => p.id !== currentUser.id);
+  }
 
   const roomTitle = room.is_group
     ? (room.name || 'Group Chat')
-    : otherUser?.display_name || 'Private Room';
+    : (otherUser?.display_name || room.name || 'Private Room');
 
   const roomAvatar = room.is_group
     ? (room.group_icon || `https://api.dicebear.com/7.x/identicon/svg?seed=${room.name}`)
     : otherUser?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250';
 
-  const filteredMessages = searchInChat.trim()
+  const rawFiltered = searchInChat.trim()
     ? messages.filter((m) => m.content.toLowerCase().includes(searchInChat.toLowerCase()))
     : messages;
+
+  const uniqueMsgMap = new Map<string, Message>();
+  rawFiltered.forEach(m => {
+    if (m && m.id && !uniqueMsgMap.has(m.id)) {
+      uniqueMsgMap.set(m.id, m);
+    }
+  });
+  const filteredMessages = Array.from(uniqueMsgMap.values());
 
   return (
     <div id="active-chat-container" className="flex-1 flex flex-col h-full bg-[#0f1115] relative overflow-hidden">
@@ -577,7 +694,7 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
           <button
             id="mobile-back-btn"
             onClick={(e) => { e.stopPropagation(); onBackMobile(); }}
-            className="md:hidden p-2 text-slate-300 hover:text-white rounded-xl bg-slate-800/80 hover:bg-[#2d3139] transition-colors shrink-0 flex items-center justify-center border border-slate-700/60"
+            className="p-2 text-slate-300 hover:text-white rounded-xl bg-slate-800/80 hover:bg-[#2d3139] transition-colors shrink-0 flex items-center justify-center border border-slate-700/60"
             title="Back to Chats"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -661,30 +778,6 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
               </div>
             )}
           </div>
-
-          {/* Collaborative Whiteboard Button */}
-          <button
-            onClick={() => setShowWhiteboard(true)}
-            className="p-2 text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 rounded-xl transition-colors flex items-center gap-1 text-xs font-bold"
-            title="Open Collaborative Real-Time Whiteboard"
-          >
-            <PenTool className="w-4 h-4 text-sky-400" />
-            <span className="hidden md:inline">Whiteboard</span>
-          </button>
-
-          {/* Local AI Thread Summarizer */}
-          <button
-            onClick={async () => {
-              const formatted = messages.map(m => ({ sender: m.sender_id === currentUser.id ? 'Me' : 'Partner', text: m.content }));
-              await summarizeThreadLocally(formatted);
-              setShowSummaryModal(true);
-            }}
-            className="p-2 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded-xl transition-colors flex items-center gap-1 text-xs font-bold"
-            title="Local Private AI Thread Summarizer"
-          >
-            <BotMessageSquare className="w-4 h-4 text-emerald-400" />
-            <span className="hidden md:inline">AI Summary</span>
-          </button>
 
           {/* Mini-Apps Dropdown Trigger */}
           <div className="relative">
@@ -803,6 +896,16 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
                     <Info className="w-4 h-4 text-emerald-400" /> Group Info
                   </button>
                 )}
+
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    onOpenSettings();
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2 hover:bg-slate-800 text-slate-200 font-medium transition"
+                >
+                  <Share2 className="w-4 h-4 text-blue-400" /> Share Profile
+                </button>
 
                 <div className="my-1 border-t border-slate-800" />
 
@@ -989,7 +1092,9 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
                   <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${isSender ? 'text-emerald-100/80' : 'text-slate-400'}`}>
                     <span>{timeFormatted}</span>
                     {isSender && (
-                      msg.status === 'read' ? (
+                      msg.status === 'queued' || msg.is_queued_offline ? (
+                        <Clock size={14} className="text-amber-300 animate-pulse" title="Queued (Offline)" />
+                      ) : msg.status === 'read' ? (
                         <CheckCheck size={14} className="text-sky-300 font-bold" title="Read" />
                       ) : msg.status === 'delivered' ? (
                         <CheckCheck size={14} className="text-emerald-200" title="Delivered" />
@@ -1032,7 +1137,8 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
               className="w-7 h-7 rounded-full object-cover ring-1 ring-emerald-500/30 shrink-0"
             />
             <div className="bg-[#1a1c20] text-slate-300 border border-[#2d3139] px-3.5 py-2 rounded-2xl rounded-tl-xs flex items-center gap-2 text-xs shadow-xs">
-              <span className="text-emerald-400 font-semibold">{typingUser}</span>
+              <span className="text-emerald-400 font-bold">{typingUser}</span>
+              <span className="text-slate-400 text-[11px]">is typing...</span>
               <span className="flex items-center gap-1">
                 <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                 <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -1061,24 +1167,53 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
         </div>
       )}
 
-      {/* 1-Tap AI Smart Reply Suggestions Bar */}
-      {smartReplies.length > 0 && (
-        <div className="px-3 py-2 bg-slate-900/90 border-t border-slate-800/80 flex items-center gap-2 overflow-x-auto no-scrollbar">
-          <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 shrink-0 pr-1">
-            <Sparkles className="w-3.5 h-3.5 animate-pulse" /> AI Replies:
-          </span>
+      {/* Smart AI Quick Reply Chips Bar */}
+      {smartReplies.length > 0 && !isVoiceRecording && (
+        <div className="px-3 py-2 bg-[#121418] border-t border-slate-800 flex items-center gap-2 overflow-x-auto custom-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-200 z-10">
+          <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 shrink-0 mr-1">
+            <Sparkles size={13} className="animate-pulse text-emerald-400" />
+            <span>AI Suggestions:</span>
+          </div>
           {smartReplies.map((reply, idx) => (
             <button
               key={idx}
-              onClick={() => {
-                setText(reply);
-                setSmartReplies([]);
-              }}
-              className="px-3 py-1 bg-slate-800 hover:bg-emerald-600/30 text-slate-200 hover:text-emerald-300 border border-slate-700/80 hover:border-emerald-500/50 rounded-full text-xs font-medium whitespace-nowrap transition-all active:scale-95 shrink-0"
+              type="button"
+              onClick={() => handleSendTextCustom(reply)}
+              className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full text-xs font-medium whitespace-nowrap transition-all active:scale-95 shrink-0 shadow-xs flex items-center gap-1"
             >
-              {reply}
+              <span>{reply}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Interactive Emoji Picker Popover */}
+      {showEmojiPicker && !isVoiceRecording && (
+        <div className="p-3 bg-slate-900 border-t border-slate-800 animate-in fade-in slide-in-from-bottom-2 duration-200 z-20">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs text-slate-400">
+            <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+              <Smile size={14} className="text-emerald-400" /> Emojis & Reactions
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowEmojiPicker(false)}
+              className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="grid grid-cols-8 sm:grid-cols-10 gap-2 max-h-36 overflow-y-auto custom-scrollbar">
+            {['👍', '❤️', '😂', '🔥', '🎉', '👏', '🙌', '🚀', '💯', '😊', '😍', '🙏', '⚡', '✨', '👌', '😎', '🤩', '🥳', '💡', '💬', '🤝', '⭐', '🎈', '🏆', '🎯', '📌', '🔔', '❤️‍🔥'].map((emoji, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleAddEmoji(emoji)}
+                className="text-xl p-1.5 hover:bg-slate-800 rounded-xl transition-transform hover:scale-125 flex items-center justify-center active:scale-95"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1112,8 +1247,10 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
           <button
             type="button"
             onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            className="p-1.5 sm:p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors shrink-0"
-            title="Emoji"
+            className={`p-1.5 sm:p-2 rounded-xl transition-colors shrink-0 ${
+              showEmojiPicker ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+            title="Emoji Picker"
           >
             <Smile className="w-5 h-5" />
           </button>
@@ -1146,10 +1283,12 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
 
           <form onSubmit={handleSendText} className="flex-1 flex items-center gap-1.5 sm:gap-2 min-w-0">
             <input
+              ref={textInputRef}
               type="text"
               placeholder="Type a message..."
               value={text}
               onChange={handleInputChange}
+              autoComplete="off"
               className="w-full px-3 sm:px-4 py-2 sm:py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 min-w-0"
             />
 
@@ -1157,6 +1296,7 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
               <button
                 type="submit"
                 className="p-2 sm:p-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl shadow-md transition-transform active:scale-95 shrink-0"
+                title="Send Message"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -1223,51 +1363,6 @@ export const ChatArea: React.FC<Props> = ({ currentUser, room, onBackMobile, onO
             handleSendTextCustom(payloadText);
           }}
         />
-      )}
-
-      {/* Collaborative Whiteboard Modal */}
-      {showWhiteboard && (
-        <CollaborativeWhiteboard
-          boardId={`room-${room.id}`}
-          currentUserId={currentUser.id}
-          currentUserName={currentUser.display_name}
-          onClose={() => setShowWhiteboard(false)}
-        />
-      )}
-
-      {/* Local AI Thread Summarizer Modal */}
-      {showSummaryModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-md p-6 text-white shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
-                <BotMessageSquare className="w-5 h-5" /> On-Device AI Thread Summary
-              </div>
-              <button onClick={() => setShowSummaryModal(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            {isSummarizing ? (
-              <div className="py-8 text-center space-y-2">
-                <Sparkles className="w-8 h-8 text-emerald-400 animate-spin mx-auto" />
-                <p className="text-xs text-slate-400">Processing quantized neural weights on-device...</p>
-              </div>
-            ) : (
-              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 text-xs leading-relaxed space-y-2">
-                <p className="text-slate-200">{summaryResult}</p>
-                <span className="text-[10px] text-emerald-400 font-mono block pt-2 border-t border-slate-900">
-                  ⚡ 100% Private Local Inference • Zero Server Telemetry
-                </span>
-              </div>
-            )}
-            <button
-              onClick={() => setShowSummaryModal(false)}
-              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition"
-            >
-              Done
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Forward Message Modal */}

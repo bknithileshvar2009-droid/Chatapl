@@ -35,6 +35,8 @@ export interface Room {
   memberUids?: string[];
   disappearing_timer?: EphemeralTimer;
   is_e2ee_enabled?: boolean;
+  topic?: string;
+  avatar_url?: string;
 }
 
 export interface RoomParticipant {
@@ -88,6 +90,8 @@ export interface TypingStatus {
   userId: string;
   roomId: string;
   isTyping: boolean;
+  username?: string;
+  displayName?: string;
 }
 
 export interface CallSession {
